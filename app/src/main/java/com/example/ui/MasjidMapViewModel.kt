@@ -1,8 +1,10 @@
 package com.example.ui
 
 import android.app.Application
+import androidx.glance.appwidget.updateAll
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.BookmarksAndMasjidExtrasRepository
 import com.example.data.HadithRepository
 import com.example.data.LocationProvider
 import com.example.data.MasjidRepository
@@ -10,6 +12,7 @@ import com.example.data.NetworkMonitor
 import com.example.data.OfflineMapTileCache
 import com.example.data.QuranRepository
 import com.example.data.UserPreferencesRepository
+import com.example.domain.AppThemeMode
 import com.example.domain.ArabicFontOption
 import com.example.domain.AsrMadhab
 import com.example.domain.CalculationMethod
@@ -18,11 +21,15 @@ import com.example.domain.HadithCatalog
 import com.example.domain.HadithEntry
 import com.example.domain.LatLngPoint
 import com.example.domain.Masjid
+import com.example.domain.PrayerAlertSound
+import com.example.domain.PrayerName
 import com.example.domain.PrayerSchedule
 import com.example.domain.PrayerTimeCalculator
 import com.example.domain.QuranTranslationOption
 import com.example.domain.RouteInfo
 import com.example.domain.TravelMode
+import com.example.notifications.PrayerAlarmScheduler
+import com.example.widget.PrayerTimesWidget
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -66,11 +73,33 @@ data class MasjidMapUiState(
     val englishFont: EnglishFontOption = EnglishFontOption.PLUS_JAKARTA,
     val englishFontSizeSp: Float = 16f,
     val quranTranslation: QuranTranslationOption = QuranTranslationOption.SAHIH_INTERNATIONAL,
+    val themeMode: AppThemeMode = AppThemeMode.SYSTEM,
+    val lastReadSurah: Int = 1,
+    val lastReadAyah: Int = 1,
+    val favoriteMasjidIds: Set<String> = emptySet(),
+    val showOnlyFavoriteMasjids: Boolean = false,
+    val iqamahByMasjid: Map<String, Map<PrayerName, String>> = emptyMap(),
+    val hadithBookmarks: List<HadithEntry> = emptyList(),
+    val notificationsEnabled: Boolean = false,
+    val notifyFajr: Boolean = true,
+    val notifyDhuhr: Boolean = true,
+    val notifyAsr: Boolean = true,
+    val notifyMaghrib: Boolean = true,
+    val notifyIsha: Boolean = true,
+    val reminderLeadMinutes: Int = 0,
+    val alertSound: PrayerAlertSound = PrayerAlertSound.DEFAULT_CHIME,
+    val tasbeehPresetId: String = "subhanallah",
+    val tasbeehCount: Int = 0,
+    val tasbeehTarget: Int = 33,
+    val tasbeehLifetimeTotal: Int = 0,
     val isLoadingMasjids: Boolean = false,
     val isLoadingRoute: Boolean = false,
     val showPrayerSheetFor: Masjid? = null,
     val showSettingsSheet: Boolean = false,
     val showOfflineSheet: Boolean = false,
+    val showQiblaSheet: Boolean = false,
+    val showAdhkarSheet: Boolean = false,
+    val showHijriDialog: Boolean = false,
     val isSavingAreaOffline: Boolean = false,
     val areaTileProgressText: String? = null,
     val savedMasjidsCount: Int = 0,
@@ -89,6 +118,7 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
     private val quranRepository = QuranRepository(application)
     private val networkMonitor = NetworkMonitor(application)
     private val prefs = UserPreferencesRepository(application)
+    private val extrasRepo = BookmarksAndMasjidExtrasRepository.getInstance(application)
 
     private var restoredSavedLocation = false
 
@@ -102,10 +132,29 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
 
     init {
         OfflineMapTileCache.ensureOsmdroidConfigured(appContext)
+        PrayerAlarmScheduler.ensureChannelsCreated(appContext)
 
         viewModelScope.launch {
             networkMonitor.isOnline.collect { online ->
                 _uiState.update { it.copy(isOnline = online) }
+            }
+        }
+
+        viewModelScope.launch {
+            extrasRepo.favoriteMasjidIds.collect { favs ->
+                _uiState.update { it.copy(favoriteMasjidIds = favs) }
+            }
+        }
+
+        viewModelScope.launch {
+            extrasRepo.iqamahByMasjid.collect { iqamah ->
+                _uiState.update { it.copy(iqamahByMasjid = iqamah) }
+            }
+        }
+
+        viewModelScope.launch {
+            extrasRepo.hadithBookmarks.collect { saved ->
+                _uiState.update { it.copy(hadithBookmarks = saved) }
             }
         }
 
@@ -176,12 +225,30 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
                         englishFont = settings.englishFont,
                         englishFontSizeSp = settings.englishFontSizeSp,
                         quranTranslation = settings.quranTranslation,
+                        themeMode = settings.themeMode,
+                        lastReadSurah = settings.lastReadSurah,
+                        lastReadAyah = settings.lastReadAyah,
+                        notificationsEnabled = settings.notificationsEnabled,
+                        notifyFajr = settings.notifyFajr,
+                        notifyDhuhr = settings.notifyDhuhr,
+                        notifyAsr = settings.notifyAsr,
+                        notifyMaghrib = settings.notifyMaghrib,
+                        notifyIsha = settings.notifyIsha,
+                        reminderLeadMinutes = settings.reminderLeadMinutes,
+                        alertSound = settings.alertSound,
+                        tasbeehPresetId = settings.tasbeehPresetId,
+                        tasbeehCount = settings.tasbeehCount,
+                        tasbeehTarget = settings.tasbeehTarget,
+                        tasbeehLifetimeTotal = settings.tasbeehLifetimeTotal,
                         masjids = updatedMasjids,
                         selectedMasjid = updatedSelected,
                         showPrayerSheetFor = updatedSheet,
                         homePrayerSchedule = updatedHomeSchedule
                     )
                 }
+
+                PrayerAlarmScheduler.scheduleUpcomingWithSettings(appContext, settings)
+                runCatching { PrayerTimesWidget().updateAll(appContext) }
             }
         }
 
@@ -437,6 +504,26 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
         _uiState.update { it.copy(recenterTick = it.recenterTick + 1) }
     }
 
+    fun toggleFavoriteMasjid(masjidId: String) {
+        extrasRepo.toggleFavoriteMasjid(masjidId)
+    }
+
+    fun toggleFavoritesFilter() {
+        _uiState.update { it.copy(showOnlyFavoriteMasjids = !it.showOnlyFavoriteMasjids) }
+    }
+
+    fun saveIqamahTimes(masjidId: String, times: Map<PrayerName, String>) {
+        extrasRepo.setIqamahTimes(masjidId, times)
+    }
+
+    fun clearIqamahTimes(masjidId: String) {
+        extrasRepo.clearIqamahTimes(masjidId)
+    }
+
+    fun toggleHadithOfTheDayBookmark() {
+        extrasRepo.toggleHadithBookmark(_uiState.value.hadithOfTheDay)
+    }
+
     fun toggleViewMode(mode: ViewMode) {
         _uiState.update { it.copy(viewMode = mode) }
     }
@@ -519,6 +606,30 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun closeOfflineSheet() {
         _uiState.update { it.copy(showOfflineSheet = false) }
+    }
+
+    fun openQiblaSheet() {
+        _uiState.update { it.copy(showQiblaSheet = true) }
+    }
+
+    fun closeQiblaSheet() {
+        _uiState.update { it.copy(showQiblaSheet = false) }
+    }
+
+    fun openAdhkarSheet() {
+        _uiState.update { it.copy(showAdhkarSheet = true) }
+    }
+
+    fun closeAdhkarSheet() {
+        _uiState.update { it.copy(showAdhkarSheet = false) }
+    }
+
+    fun openHijriDialog() {
+        _uiState.update { it.copy(showHijriDialog = true) }
+    }
+
+    fun closeHijriDialog() {
+        _uiState.update { it.copy(showHijriDialog = false) }
     }
 
     fun refreshOfflineStats() {
@@ -619,6 +730,75 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun updateQuranTranslation(translation: QuranTranslationOption) {
         viewModelScope.launch { prefs.setQuranTranslation(translation) }
+    }
+
+    fun updateThemeMode(mode: AppThemeMode) {
+        viewModelScope.launch { prefs.setThemeMode(mode) }
+    }
+
+    fun setNotificationsEnabled(enabled: Boolean) {
+        viewModelScope.launch { prefs.setNotificationsEnabled(enabled) }
+    }
+
+    fun togglePrayerNotification(prayer: PrayerName) {
+        viewModelScope.launch { prefs.togglePrayerNotification(prayer) }
+    }
+
+    fun setReminderLeadMinutes(minutes: Int) {
+        viewModelScope.launch { prefs.setReminderLeadMinutes(minutes) }
+    }
+
+    fun setAlertSound(sound: PrayerAlertSound) {
+        viewModelScope.launch { prefs.setAlertSound(sound) }
+    }
+
+    fun sendTestNotification() {
+        val nextLabel = _uiState.value.homePrayerSchedule.nextPrayer?.name?.displayName ?: "Next Prayer"
+        PrayerAlarmScheduler.sendTestNotification(appContext, _uiState.value.alertSound, nextLabel)
+    }
+
+    fun selectTasbeehPreset(presetId: String, defaultTarget: Int) {
+        viewModelScope.launch {
+            prefs.saveTasbeehState(
+                presetId = presetId,
+                count = 0,
+                target = defaultTarget,
+                lifetimeTotal = _uiState.value.tasbeehLifetimeTotal
+            )
+        }
+    }
+
+    fun stepTasbeeh(newCount: Int, target: Int, newLifetime: Int) {
+        viewModelScope.launch {
+            prefs.saveTasbeehState(
+                presetId = _uiState.value.tasbeehPresetId,
+                count = newCount,
+                target = target,
+                lifetimeTotal = newLifetime
+            )
+        }
+    }
+
+    fun changeTasbeehTarget(target: Int) {
+        viewModelScope.launch {
+            prefs.saveTasbeehState(
+                presetId = _uiState.value.tasbeehPresetId,
+                count = _uiState.value.tasbeehCount,
+                target = target,
+                lifetimeTotal = _uiState.value.tasbeehLifetimeTotal
+            )
+        }
+    }
+
+    fun resetTasbeeh() {
+        viewModelScope.launch {
+            prefs.saveTasbeehState(
+                presetId = _uiState.value.tasbeehPresetId,
+                count = 0,
+                target = _uiState.value.tasbeehTarget,
+                lifetimeTotal = _uiState.value.tasbeehLifetimeTotal
+            )
+        }
     }
 
     fun clearError() {

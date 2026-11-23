@@ -532,4 +532,125 @@ class HadithRepository(private val context: Context) {
         }
         throw lastError ?: IllegalStateException("Offline: book chapter is not downloaded yet.")
     }
+
+    suspend fun searchOfflineCachedBooks(
+        query: String,
+        limit: Int = 40
+    ): List<com.example.domain.HadithSearchHit> = withContext(Dispatchers.IO) {
+        val trimmed = query.trim()
+        if (trimmed.length < 2) return@withContext emptyList()
+        val hits = ArrayList<com.example.domain.HadithSearchHit>(minOf(limit, 24))
+
+        for (book in HadithCatalog.top21Books) {
+            if (hits.size >= limit) break
+            when (book.sourceType) {
+                HadithSourceType.AHMED_BASET_BOOK -> {
+                    val file = File(cacheDir, "ahmed_${book.id}.json")
+                    if (!file.exists()) continue
+                    runCatching {
+                        val root = JSONObject(file.readText())
+                        val arr = root.optJSONArray("hadiths") ?: return@runCatching
+                        for (i in 0 until arr.length()) {
+                            if (hits.size >= limit) break
+                            val obj = arr.getJSONObject(i)
+                            val cId = obj.optInt("chapterId", 0).toString()
+                            val idInBook = obj.optInt("idInBook", obj.optInt("id", i + 1))
+                            val arabic = obj.optString("arabic").trim()
+                            val engObj = obj.optJSONObject("english")
+                            val narrator = engObj?.optString("narrator")?.trim().orEmpty()
+                            val text = engObj?.optString("text")?.trim().orEmpty()
+                            if (text.contains(trimmed, ignoreCase = true) ||
+                                narrator.contains(trimmed, ignoreCase = true) ||
+                                arabic.contains(trimmed)
+                            ) {
+                                hits.add(
+                                    com.example.domain.HadithSearchHit(
+                                        bookId = book.id,
+                                        bookTitle = book.titleEnglish,
+                                        chapterId = cId,
+                                        entry = HadithEntry(
+                                            id = "${book.id}_$idInBook",
+                                            numberLabel = "Hadith $idInBook",
+                                            bookTitle = book.titleEnglish,
+                                            chapterTitle = "",
+                                            arabicText = arabic,
+                                            narrator = narrator,
+                                            englishText = text,
+                                            reference = "${book.titleEnglish} $idInBook"
+                                        )
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+                HadithSourceType.HISN_MUSLIM_JSON -> {
+                    val file = File(cacheDir, "hisn_en.json")
+                    if (!file.exists()) continue
+                    runCatching {
+                        val chapters = getHisnChapters()
+                        for (ch in chapters) {
+                            if (hits.size >= limit) break
+                            getHisnEntries(ch).forEach { entry ->
+                                if (hits.size < limit &&
+                                    (entry.englishText.contains(trimmed, ignoreCase = true) ||
+                                        entry.chapterTitle.contains(trimmed, ignoreCase = true) ||
+                                        entry.arabicText.contains(trimmed))
+                                ) {
+                                    hits.add(
+                                        com.example.domain.HadithSearchHit(
+                                            bookId = book.id,
+                                            bookTitle = book.titleEnglish,
+                                            chapterId = ch.id,
+                                            entry = entry
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                HadithSourceType.FAWAZ_SECTIONS -> {
+                    val slug = book.fawazSlug ?: continue
+                    val files = cacheDir.listFiles { f ->
+                        f.name.startsWith("fawaz_eng_${slug}_") && f.name.endsWith(".json")
+                    }.orEmpty()
+                    for (file in files) {
+                        if (hits.size >= limit) break
+                        val secKey = file.name.removePrefix("fawaz_eng_${slug}_").removeSuffix(".json")
+                        runCatching {
+                            val engArr = JSONObject(file.readText()).optJSONArray("hadiths") ?: return@runCatching
+                            for (i in 0 until engArr.length()) {
+                                if (hits.size >= limit) break
+                                val obj = engArr.getJSONObject(i)
+                                val num = obj.opt("hadithnumber")?.toString() ?: "${i + 1}"
+                                val text = obj.optString("text").trim()
+                                if (text.contains(trimmed, ignoreCase = true)) {
+                                    hits.add(
+                                        com.example.domain.HadithSearchHit(
+                                            bookId = book.id,
+                                            bookTitle = book.titleEnglish,
+                                            chapterId = secKey,
+                                            entry = HadithEntry(
+                                                id = "${book.id}_${secKey}_$num",
+                                                numberLabel = "Hadith $num",
+                                                bookTitle = book.titleEnglish,
+                                                chapterTitle = "Section $secKey",
+                                                arabicText = "",
+                                                narrator = "",
+                                                englishText = text,
+                                                reference = "${book.titleEnglish} $num"
+                                            )
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                HadithSourceType.HADEETH_ENC -> Unit
+            }
+        }
+        hits
+    }
 }

@@ -10,17 +10,23 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -31,10 +37,13 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.domain.AppThemeMode
 import com.example.domain.ArabicFontOption
 import com.example.domain.AsrMadhab
 import com.example.domain.CalculationMethod
 import com.example.domain.EnglishFontOption
+import com.example.domain.PrayerAlertSound
+import com.example.domain.PrayerName
 import com.example.domain.QuranTranslationOption
 import com.example.ui.theme.arabicFontFamilyFor
 import com.example.ui.theme.englishFontFamilyFor
@@ -45,18 +54,33 @@ import kotlin.math.roundToInt
 fun SettingsSheet(
     selectedMethod: CalculationMethod,
     selectedMadhab: AsrMadhab,
+    selectedThemeMode: AppThemeMode,
     selectedArabicFont: ArabicFontOption,
     arabicFontSizeSp: Float,
     selectedEnglishFont: EnglishFontOption,
     englishFontSizeSp: Float,
     selectedTranslation: QuranTranslationOption,
+    notificationsEnabled: Boolean,
+    notifyFajr: Boolean,
+    notifyDhuhr: Boolean,
+    notifyAsr: Boolean,
+    notifyMaghrib: Boolean,
+    notifyIsha: Boolean,
+    reminderLeadMinutes: Int,
+    alertSound: PrayerAlertSound,
     onSelectMethod: (CalculationMethod) -> Unit,
     onSelectMadhab: (AsrMadhab) -> Unit,
+    onSelectThemeMode: (AppThemeMode) -> Unit,
     onSelectArabicFont: (ArabicFontOption) -> Unit,
     onSelectArabicFontSize: (Float) -> Unit,
     onSelectEnglishFont: (EnglishFontOption) -> Unit,
     onSelectEnglishFontSize: (Float) -> Unit,
     onSelectTranslation: (QuranTranslationOption) -> Unit,
+    onToggleNotifications: (Boolean) -> Unit,
+    onTogglePrayerNotify: (PrayerName) -> Unit,
+    onSelectLeadMinutes: (Int) -> Unit,
+    onSelectAlertSound: (PrayerAlertSound) -> Unit,
+    onSendTestNotification: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -81,6 +105,151 @@ fun SettingsSheet(
                 style = MaterialTheme.typography.titleLarge,
                 color = MaterialTheme.colorScheme.onSurface
             )
+
+            // ---- Appearance / Theme Mode ----
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "Appearance & Night Theme",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    AppThemeMode.entries.forEach { mode ->
+                        FilterChip(
+                            selected = mode == selectedThemeMode,
+                            onClick = { onSelectThemeMode(mode) },
+                            label = { Text(mode.displayName) },
+                            modifier = Modifier.testTag("theme_mode_${mode.id}")
+                        )
+                    }
+                }
+            }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+            // ---- Prayer Alerts & Reminders ----
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Offline Prayer Alerts",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = "Local notifications on your device for the 5 daily prayers",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = notificationsEnabled,
+                        onCheckedChange = onToggleNotifications,
+                        modifier = Modifier.testTag("prayer_alerts_master_switch")
+                    )
+                }
+
+                if (notificationsEnabled) {
+                    Text(
+                        text = "Enabled Prayers",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        val prayerToggles = listOf(
+                            PrayerName.FAJR to notifyFajr,
+                            PrayerName.DHUHR to notifyDhuhr,
+                            PrayerName.ASR to notifyAsr,
+                            PrayerName.MAGHRIB to notifyMaghrib,
+                            PrayerName.ISHA to notifyIsha
+                        )
+                        prayerToggles.forEach { (prayer, enabled) ->
+                            FilterChip(
+                                selected = enabled,
+                                onClick = { onTogglePrayerNotify(prayer) },
+                                label = { Text(prayer.displayName) },
+                                modifier = Modifier.testTag("notify_chip_${prayer.name.lowercase()}")
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "Reminder Lead Time",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf(0 to "At Adhan", 10 to "10 min early", 15 to "15 min early", 30 to "30 min early")
+                            .forEach { (mins, label) ->
+                                FilterChip(
+                                    selected = reminderLeadMinutes == mins,
+                                    onClick = { onSelectLeadMinutes(mins) },
+                                    label = { Text(label) },
+                                    modifier = Modifier.testTag("lead_minutes_$mins")
+                                )
+                            }
+                    }
+
+                    Text(
+                        text = "Alert Sound Style",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        PrayerAlertSound.entries.forEach { sound ->
+                            FilterChip(
+                                selected = alertSound == sound,
+                                onClick = { onSelectAlertSound(sound) },
+                                label = { Text(sound.displayName) },
+                                modifier = Modifier.testTag("alert_sound_${sound.id}")
+                            )
+                        }
+                    }
+
+                    FilledTonalButton(
+                        onClick = onSendTestNotification,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(46.dp)
+                            .testTag("send_test_notification_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.NotificationsActive,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.height(0.dp).padding(horizontal = 4.dp))
+                        Text("Send Test Prayer Alert")
+                    }
+                }
+            }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
             // ---- Fonts & Font Sizes ----
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {

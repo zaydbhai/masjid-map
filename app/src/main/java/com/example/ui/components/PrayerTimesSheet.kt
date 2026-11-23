@@ -17,9 +17,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.Route
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarOutline
 import androidx.compose.material.icons.outlined.Mosque
 import androidx.compose.material.icons.outlined.NightsStay
 import androidx.compose.material.icons.outlined.Schedule
@@ -31,12 +34,21 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -58,6 +70,11 @@ import kotlin.math.roundToInt
 fun PrayerTimesSheet(
     masjid: Masjid,
     travelMode: TravelMode,
+    isFavorite: Boolean,
+    iqamahTimes: Map<PrayerName, String>,
+    onToggleFavorite: () -> Unit,
+    onSaveIqamahTimes: (Map<PrayerName, String>) -> Unit,
+    onClearIqamahTimes: () -> Unit,
     onDismiss: () -> Unit,
     onShowRoute: (Masjid) -> Unit,
     onStartExternalNav: (Masjid) -> Unit
@@ -66,6 +83,21 @@ fun PrayerTimesSheet(
     val schedule = masjid.prayerSchedule
     val qiblaDeg = masjid.qiblaBearingDegrees.roundToInt()
     val qiblaDir = PrayerTimeCalculator.compassCardinal(masjid.qiblaBearingDegrees)
+
+    var showIqamahEditor by remember(masjid.id) { mutableStateOf(false) }
+    val draftIqamah = remember(masjid.id, iqamahTimes) {
+        mutableStateMapOf<PrayerName, String>().apply {
+            listOf(
+                PrayerName.FAJR,
+                PrayerName.DHUHR,
+                PrayerName.ASR,
+                PrayerName.MAGHRIB,
+                PrayerName.ISHA
+            ).forEach { p ->
+                put(p, iqamahTimes[p].orEmpty())
+            }
+        }
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -132,10 +164,23 @@ fun PrayerTimesSheet(
                         )
                     }
                 }
+                IconButton(
+                    onClick = onToggleFavorite,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .testTag("sheet_favorite_button")
+                ) {
+                    Icon(
+                        imageVector = if (isFavorite) Icons.Filled.Star else Icons.Filled.StarOutline,
+                        contentDescription = if (isFavorite) "Remove masjid from favorites" else "Favorite this masjid",
+                        tint = if (isFavorite) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
 
             // Next Prayer Highlight Banner
             schedule.nextPrayer?.let { next ->
+                val nextIqamah = iqamahTimes[next.name]
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -168,7 +213,12 @@ fun PrayerTimesSheet(
                                 color = MaterialTheme.colorScheme.onPrimary
                             )
                             Text(
-                                text = GeoFormatters.formatCountdown(schedule.minutesUntilNext),
+                                text = buildString {
+                                    append(GeoFormatters.formatCountdown(schedule.minutesUntilNext))
+                                    if (!nextIqamah.isNullOrBlank()) {
+                                        append(" · Iqamah $nextIqamah")
+                                    }
+                                },
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.secondaryContainer
                             )
@@ -191,6 +241,7 @@ fun PrayerTimesSheet(
                 Column(modifier = Modifier.padding(vertical = 6.dp)) {
                     schedule.entries.forEachIndexed { index, entry ->
                         val isNext = entry.isNext
+                        val customIqamah = iqamahTimes[entry.name]
                         val rowBg = if (isNext) {
                             MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
                         } else {
@@ -244,16 +295,25 @@ fun PrayerTimesSheet(
                                     }
                                 }
                             }
-                            Text(
-                                text = entry.formattedTime,
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = if (isNext) FontWeight.Bold else FontWeight.SemiBold,
-                                color = if (isNext) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    MaterialTheme.colorScheme.onSurface
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text(
+                                    text = entry.formattedTime,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = if (isNext) FontWeight.Bold else FontWeight.SemiBold,
+                                    color = if (isNext) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurface
+                                    }
+                                )
+                                if (!customIqamah.isNullOrBlank()) {
+                                    Text(
+                                        text = "Iqamah $customIqamah",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.secondary
+                                    )
                                 }
-                            )
+                            }
                         }
                         if (index < schedule.entries.lastIndex && !isNext) {
                             HorizontalDivider(
@@ -261,6 +321,99 @@ fun PrayerTimesSheet(
                                 thickness = 0.5.dp,
                                 color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
                             )
+                        }
+                    }
+                }
+            }
+
+            // Custom Masjid Iqamah Times Editor
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Masjid Iqamah Times",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = if (iqamahTimes.isEmpty()) {
+                                    "Save your masjid's local Jama'ah times offline"
+                                } else {
+                                    "${iqamahTimes.size} custom Iqamah time(s) saved locally"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        TextButton(
+                            onClick = { showIqamahEditor = !showIqamahEditor },
+                            modifier = Modifier.testTag("toggle_iqamah_editor")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Edit,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(if (showIqamahEditor) "Hide" else "Edit")
+                        }
+                    }
+
+                    if (showIqamahEditor) {
+                        listOf(
+                            PrayerName.FAJR,
+                            PrayerName.DHUHR,
+                            PrayerName.ASR,
+                            PrayerName.MAGHRIB,
+                            PrayerName.ISHA
+                        ).forEach { prayer ->
+                            OutlinedTextField(
+                                value = draftIqamah[prayer].orEmpty(),
+                                onValueChange = { draftIqamah[prayer] = it },
+                                label = { Text("${prayer.displayName} Iqamah (e.g. 1:30 PM)") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            if (iqamahTimes.isNotEmpty()) {
+                                OutlinedButton(
+                                    onClick = {
+                                        onClearIqamahTimes()
+                                        draftIqamah.keys.forEach { k -> draftIqamah[k] = "" }
+                                        showIqamahEditor = false
+                                    },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("Clear")
+                                }
+                            }
+                            Button(
+                                onClick = {
+                                    onSaveIqamahTimes(draftIqamah.toMap())
+                                    showIqamahEditor = false
+                                },
+                                modifier = Modifier
+                                    .weight(1.2f)
+                                    .testTag("save_iqamah_button")
+                            ) {
+                                Text("Save Iqamah Times")
+                            }
                         }
                     }
                 }

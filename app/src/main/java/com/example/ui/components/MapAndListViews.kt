@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarOutline
 import androidx.compose.material.icons.outlined.Mosque
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -308,7 +309,9 @@ private fun createUserDotDrawable(context: Context, fillColor: Int): Drawable {
 fun SelectedMasjidCard(
     masjid: Masjid,
     travelMode: TravelMode,
+    isFavorite: Boolean,
     isLoadingRoute: Boolean,
+    onToggleFavorite: () -> Unit,
     onShowRoute: (Masjid) -> Unit,
     onShowPrayerTimes: (Masjid) -> Unit,
     onStartExternalNav: (Masjid) -> Unit,
@@ -351,7 +354,18 @@ fun SelectedMasjidCard(
                         overflow = TextOverflow.Ellipsis
                     )
                 }
-                Spacer(modifier = Modifier.width(8.dp))
+                IconButton(
+                    onClick = onToggleFavorite,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .testTag("selected_card_favorite_button")
+                ) {
+                    Icon(
+                        imageVector = if (isFavorite) Icons.Filled.Star else Icons.Filled.StarOutline,
+                        contentDescription = if (isFavorite) "Remove favorite" else "Add to favorites",
+                        tint = if (isFavorite) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 Surface(
                     shape = RoundedCornerShape(10.dp),
                     color = MaterialTheme.colorScheme.primaryContainer
@@ -707,9 +721,11 @@ fun ActiveRouteCard(
 fun MasjidListView(
     masjids: List<Masjid>,
     selectedMasjid: Masjid?,
+    favoriteMasjidIds: Set<String>,
     travelMode: TravelMode,
     isLoading: Boolean,
     onSelectOnMap: (Masjid) -> Unit,
+    onToggleFavorite: (Masjid) -> Unit,
     onRoute: (Masjid) -> Unit,
     onShowPrayerTimes: (Masjid) -> Unit,
     modifier: Modifier = Modifier
@@ -834,7 +850,19 @@ fun MasjidListView(
                                 )
                             }
                         }
-                        Spacer(modifier = Modifier.width(8.dp))
+                        IconButton(
+                            onClick = { onToggleFavorite(masjid) },
+                            modifier = Modifier
+                                .size(48.dp)
+                                .testTag("list_favorite_${masjid.id}")
+                        ) {
+                            val fav = favoriteMasjidIds.contains(masjid.id)
+                            Icon(
+                                imageVector = if (fav) Icons.Filled.Star else Icons.Filled.StarOutline,
+                                contentDescription = if (fav) "Remove favorite" else "Add to favorites",
+                                tint = if (fav) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                         Surface(
                             shape = RoundedCornerShape(10.dp),
                             color = MaterialTheme.colorScheme.primaryContainer

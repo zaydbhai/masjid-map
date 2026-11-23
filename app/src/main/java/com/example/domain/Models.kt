@@ -316,3 +316,57 @@ data class HadithEntry(
     val grade: String? = null,
     val reference: String = ""
 )
+
+enum class AppThemeMode(
+    val id: String,
+    val displayName: String
+) {
+    SYSTEM("system", "System"),
+    LIGHT("light", "Light"),
+    DARK("dark", "Dark"),
+    AMOLED("amoled", "AMOLED Black");
+
+    companion object {
+        fun fromId(id: String?): AppThemeMode =
+            entries.firstOrNull { it.id == id } ?: SYSTEM
+    }
+}
+
+enum class PrayerAlertSound(
+    val id: String,
+    val displayName: String
+) {
+    DEFAULT_CHIME("chime", "Chime & Banner"),
+    VIBRATE_ONLY("vibrate", "Vibrate Only"),
+    SILENT("silent", "Silent Banner");
+
+    companion object {
+        fun fromId(id: String?): PrayerAlertSound =
+            entries.firstOrNull { it.id == id } ?: DEFAULT_CHIME
+    }
+}
+
+data class QuranBookmark(
+    val chapter: Int,
+    val verse: Int,
+    val surahName: String,
+    val arabicSnippet: String,
+    val englishSnippet: String,
+    val savedAtMillis: Long = System.currentTimeMillis()
+)
+
+data class QuranSearchHit(
+    val chapter: Int,
+    val verse: Int,
+    val surahName: String,
+    val arabicText: String,
+    val englishText: String
+)
+
+data class HadithSearchHit(
+    val bookId: String,
+    val bookTitle: String,
+    val chapterId: String,
+    val entry: HadithEntry
+)
+

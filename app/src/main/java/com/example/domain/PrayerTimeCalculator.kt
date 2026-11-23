@@ -215,6 +215,15 @@ object PrayerTimeCalculator {
         return dirs[idx.coerceIn(0, dirs.lastIndex)]
     }
 
+    fun distanceToKaabaKm(from: LatLngPoint): Double =
+        distanceMeters(from, LatLngPoint(KAABA_LAT, KAABA_LNG)) / 1000.0
+
+    fun shortestAngleDiffDegrees(fromDeg: Double, toDeg: Double): Double {
+        var diff = ((toDeg - fromDeg + 540.0) % 360.0) - 180.0
+        if (diff < -180.0) diff += 360.0
+        return diff
+    }
+
     private fun julianDate(year: Int, month: Int, day: Int): Double {
         var y = year
         var m = month

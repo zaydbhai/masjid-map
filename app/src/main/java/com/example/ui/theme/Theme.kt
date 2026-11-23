@@ -70,6 +70,35 @@ private val DarkColors = darkColorScheme(
     error = ErrorDark
 )
 
+private val AmoledColors = darkColorScheme(
+    primary = MintPrimaryDark,
+    onPrimary = MintOnPrimaryDark,
+    primaryContainer = EmeraldContainerDark,
+    onPrimaryContainer = MintOnContainerDark,
+    secondary = GoldSecondaryDark,
+    onSecondary = GoldOnSecondaryDark,
+    secondaryContainer = GoldContainerDark,
+    onSecondaryContainer = GoldOnContainerDark,
+    tertiary = SkyTertiaryDark,
+    onTertiary = SkyOnTertiaryDark,
+    tertiaryContainer = SkyContainerDark,
+    onTertiaryContainer = SkyOnContainerDark,
+    background = AmoledBackground,
+    onBackground = MistOnBackgroundDark,
+    surface = AmoledSurface,
+    onSurface = MistOnSurfaceDark,
+    surfaceVariant = AmoledSurfaceVariant,
+    onSurfaceVariant = MistOnSurfaceVariantDark,
+    outline = PineOutlineDark,
+    outlineVariant = PineOutlineVariantDark,
+    surfaceContainerLowest = AmoledContainerLowest,
+    surfaceContainerLow = AmoledContainerLow,
+    surfaceContainer = AmoledContainer,
+    surfaceContainerHigh = AmoledContainerHigh,
+    surfaceContainerHighest = AmoledContainerHighest,
+    error = ErrorDark
+)
+
 val MasjidShapes = Shapes(
     extraSmall = RoundedCornerShape(8.dp),
     small = RoundedCornerShape(12.dp),
@@ -80,14 +109,20 @@ val MasjidShapes = Shapes(
 
 @Composable
 fun MasjidMapTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    themeMode: com.example.domain.AppThemeMode = com.example.domain.AppThemeMode.SYSTEM,
     arabicFont: ArabicFontOption = ArabicFontOption.AMIRI,
     arabicFontSizeSp: Float = 28f,
     englishFont: EnglishFontOption = EnglishFontOption.PLUS_JAKARTA,
     englishFontSizeSp: Float = 16f,
     content: @Composable () -> Unit
 ) {
-    val colorScheme = if (darkTheme) DarkColors else LightColors
+    val systemDark = isSystemInDarkTheme()
+    val colorScheme = when (themeMode) {
+        com.example.domain.AppThemeMode.SYSTEM -> if (systemDark) DarkColors else LightColors
+        com.example.domain.AppThemeMode.LIGHT -> LightColors
+        com.example.domain.AppThemeMode.DARK -> DarkColors
+        com.example.domain.AppThemeMode.AMOLED -> AmoledColors
+    }
     val chosenEnglishFamily = englishFontFamilyFor(englishFont)
     val chosenArabicFamily = arabicFontFamilyFor(arabicFont)
     val typography = buildAppTypography(

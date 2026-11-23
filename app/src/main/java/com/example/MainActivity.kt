@@ -20,6 +20,7 @@ class MainActivity : ComponentActivity() {
             val state by masjidViewModel.uiState.collectAsStateWithLifecycle()
 
             MasjidMapTheme(
+                themeMode = state.themeMode,
                 arabicFont = state.arabicFont,
                 arabicFontSizeSp = state.arabicFontSizeSp,
                 englishFont = state.englishFont,

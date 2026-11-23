@@ -1,6 +1,8 @@
 package com.example.ui
 
 import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -32,10 +34,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.ui.components.AdhkarTasbeehSheet
+import com.example.ui.components.HijriCalendarDialog
 import com.example.ui.components.OfflinePackSheet
 import com.example.ui.components.PrayerTimesSheet
+import com.example.ui.components.QiblaCompassSheet
 import com.example.ui.components.SettingsSheet
 
 @Composable
@@ -58,6 +64,12 @@ fun AppMainScreen(
         masjidViewModel.onPermissionResult(granted)
     }
 
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        masjidViewModel.setNotificationsEnabled(granted)
+    }
+
     val requestLocationPermission = {
         permissionLauncher.launch(
             arrayOf(
@@ -65,6 +77,24 @@ fun AppMainScreen(
                 Manifest.permission.ACCESS_COARSE_LOCATION
             )
         )
+    }
+
+    val onTogglePrayerNotifications: (Boolean) -> Unit = { wantEnabled ->
+        if (!wantEnabled) {
+            masjidViewModel.setNotificationsEnabled(false)
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val granted = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+            if (granted) {
+                masjidViewModel.setNotificationsEnabled(true)
+            } else {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        } else {
+            masjidViewModel.setNotificationsEnabled(true)
+        }
     }
 
     LaunchedEffect(state.errorMessage) {
@@ -78,9 +108,15 @@ fun AppMainScreen(
         enabled = state.showPrayerSheetFor != null ||
             state.showSettingsSheet ||
             state.showOfflineSheet ||
+            state.showQiblaSheet ||
+            state.showAdhkarSheet ||
+            state.showHijriDialog ||
             state.currentTab != MainTab.HOME
     ) {
         when {
+            state.showHijriDialog -> masjidViewModel.closeHijriDialog()
+            state.showQiblaSheet -> masjidViewModel.closeQiblaSheet()
+            state.showAdhkarSheet -> masjidViewModel.closeAdhkarSheet()
             state.showPrayerSheetFor != null -> masjidViewModel.closePrayerSheet()
             state.showSettingsSheet -> masjidViewModel.closeSettingsSheet()
             state.showOfflineSheet -> masjidViewModel.closeOfflineSheet()
@@ -125,6 +161,21 @@ fun AppMainScreen(
                     onRequestLocation = requestLocationPermission,
                     onOpenOfflineSheet = masjidViewModel::openOfflineSheet,
                     onOpenSettings = masjidViewModel::openSettingsSheet,
+                    onOpenQibla = masjidViewModel::openQiblaSheet,
+                    onOpenAdhkar = masjidViewModel::openAdhkarSheet,
+                    onOpenHijriDialog = masjidViewModel::openHijriDialog,
+                    onContinueQuran = { surah, ayah ->
+                        masjidViewModel.selectTab(MainTab.QURAN)
+                        quranViewModel.openSurah(surah, initialAyah = ayah)
+                    },
+                    onToggleHadithBookmark = masjidViewModel::toggleHadithOfTheDayBookmark,
+                    onSelectMasjidFromHome = { masjid, showTimes ->
+                        masjidViewModel.selectMasjid(masjid, switchToMap = true)
+                        masjidViewModel.selectTab(MainTab.MASJIDS)
+                        if (showTimes) {
+                            masjidViewModel.openPrayerSheet(masjid)
+                        }
+                    },
                     onNavigateTab = masjidViewModel::selectTab
                 )
 
@@ -132,7 +183,8 @@ fun AppMainScreen(
                     state = state,
                     viewModel = masjidViewModel,
                     onRequestLocationPermission = requestLocationPermission,
-                    onOpenOfflineSheet = masjidViewModel::openOfflineSheet
+                    onOpenOfflineSheet = masjidViewModel::openOfflineSheet,
+                    onOpenQiblaSheet = masjidViewModel::openQiblaSheet
                 )
 
                 MainTab.QURAN -> QuranScreen(
@@ -142,40 +194,61 @@ fun AppMainScreen(
 
                 MainTab.HADITH -> HadithScreen(
                     onOpenSettings = masjidViewModel::openSettingsSheet,
+                    onOpenAdhkar = masjidViewModel::openAdhkarSheet,
                     hadithViewModel = hadithViewModel
                 )
             }
         }
     }
 
-    // Per-Masjid Prayer Times Modal Bottom Sheet
+    // Per-Masjid Prayer Times Modal Bottom Sheet (with Favorite + Custom Iqamah Times)
     state.showPrayerSheetFor?.let { masjid ->
         PrayerTimesSheet(
             masjid = masjid,
             travelMode = state.travelMode,
+            isFavorite = state.favoriteMasjidIds.contains(masjid.id),
+            iqamahTimes = state.iqamahByMasjid[masjid.id].orEmpty(),
+            onToggleFavorite = { masjidViewModel.toggleFavoriteMasjid(masjid.id) },
+            onSaveIqamahTimes = { map -> masjidViewModel.saveIqamahTimes(masjid.id, map) },
+            onClearIqamahTimes = { masjidViewModel.clearIqamahTimes(masjid.id) },
             onDismiss = masjidViewModel::closePrayerSheet,
             onShowRoute = { m -> masjidViewModel.requestRouteTo(m) },
             onStartExternalNav = { m -> launchExternalNavigation(context, m, state.travelMode) }
         )
     }
 
-    // Unified App & Reading Settings Bottom Sheet
+    // Unified App, Theme, Notification & Reading Settings Bottom Sheet
     if (state.showSettingsSheet) {
         SettingsSheet(
             selectedMethod = state.calculationMethod,
             selectedMadhab = state.asrMadhab,
+            selectedThemeMode = state.themeMode,
             selectedArabicFont = state.arabicFont,
             arabicFontSizeSp = state.arabicFontSizeSp,
             selectedEnglishFont = state.englishFont,
             englishFontSizeSp = state.englishFontSizeSp,
             selectedTranslation = state.quranTranslation,
+            notificationsEnabled = state.notificationsEnabled,
+            notifyFajr = state.notifyFajr,
+            notifyDhuhr = state.notifyDhuhr,
+            notifyAsr = state.notifyAsr,
+            notifyMaghrib = state.notifyMaghrib,
+            notifyIsha = state.notifyIsha,
+            reminderLeadMinutes = state.reminderLeadMinutes,
+            alertSound = state.alertSound,
             onSelectMethod = masjidViewModel::updateCalculationMethod,
             onSelectMadhab = masjidViewModel::updateAsrMadhab,
+            onSelectThemeMode = masjidViewModel::updateThemeMode,
             onSelectArabicFont = masjidViewModel::updateArabicFont,
             onSelectArabicFontSize = masjidViewModel::updateArabicFontSize,
             onSelectEnglishFont = masjidViewModel::updateEnglishFont,
             onSelectEnglishFontSize = masjidViewModel::updateEnglishFontSize,
             onSelectTranslation = masjidViewModel::updateQuranTranslation,
+            onToggleNotifications = onTogglePrayerNotifications,
+            onTogglePrayerNotify = masjidViewModel::togglePrayerNotification,
+            onSelectLeadMinutes = masjidViewModel::setReminderLeadMinutes,
+            onSelectAlertSound = masjidViewModel::setAlertSound,
+            onSendTestNotification = masjidViewModel::sendTestNotification,
             onDismiss = masjidViewModel::closeSettingsSheet
         )
     }
@@ -213,4 +286,34 @@ fun AppMainScreen(
             onDismiss = masjidViewModel::closeOfflineSheet
         )
     }
+
+    // Offline Live Qibla Compass Sheet
+    if (state.showQiblaSheet) {
+        QiblaCompassSheet(
+            userLocation = state.userLocation ?: state.mapCenter,
+            locationLabel = state.homeLocationLabel,
+            onDismiss = masjidViewModel::closeQiblaSheet
+        )
+    }
+
+    // Offline Daily Adhkar & Haptic Tasbeeh Sheet
+    if (state.showAdhkarSheet) {
+        AdhkarTasbeehSheet(
+            tasbeehPresetId = state.tasbeehPresetId,
+            tasbeehCount = state.tasbeehCount,
+            tasbeehTarget = state.tasbeehTarget,
+            tasbeehLifetimeTotal = state.tasbeehLifetimeTotal,
+            onSelectTasbeehPreset = masjidViewModel::selectTasbeehPreset,
+            onTasbeehStep = masjidViewModel::stepTasbeeh,
+            onChangeTasbeehTarget = masjidViewModel::changeTasbeehTarget,
+            onResetTasbeeh = masjidViewModel::resetTasbeeh,
+            onDismiss = masjidViewModel::closeAdhkarSheet
+        )
+    }
+
+    // Offline Hijri Date & Upcoming Islamic Dates Dialog
+    if (state.showHijriDialog) {
+        HijriCalendarDialog(onDismiss = masjidViewModel::closeHijriDialog)
+    }
 }
+

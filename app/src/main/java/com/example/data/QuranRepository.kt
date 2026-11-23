@@ -19,7 +19,7 @@ class QuranRepository(private val context: Context) {
         File(context.filesDir, "quran_cache").apply { mkdirs() }
     }
 
-    private val arabicEdition = "ara-quranuthmani"
+    private val arabicEdition = DEFAULT_ARABIC_EDITION
 
     suspend fun loadSurah(
         surahNumber: Int,
@@ -58,7 +58,7 @@ class QuranRepository(private val context: Context) {
             translation = translation,
             verses = verses,
             verifiedIntegrity = verified,
-            sourceLabel = "Tanzil Uthmani · GitHub fawazahmed0/quran-api"
+            sourceLabel = "Uthmani Hafs · GitHub fawazahmed0/quran-api"
         )
     }
 
@@ -125,12 +125,19 @@ class QuranRepository(private val context: Context) {
         requireArabicScript: Boolean,
         onChapterProgress: (Int) -> Unit
     ) {
-        val fullUrls = listOf(
-            "https://cdn.jsdelivr.net/gh/fawazahmed0/quran-api@1/editions/$edition.min.json",
-            "https://cdn.jsdelivr.net/gh/fawazahmed0/quran-api@1/editions/$edition.json",
-            "https://raw.githubusercontent.com/fawazahmed0/quran-api/1/editions/$edition.min.json",
-            "https://raw.githubusercontent.com/fawazahmed0/quran-api/1/editions/$edition.json"
-        )
+        val candidateEditions = if (edition == arabicEdition) {
+            listOf(arabicEdition, "ara-quranuthmanienc", "ara-quranacademy")
+        } else {
+            listOf(edition)
+        }
+        val fullUrls = candidateEditions.flatMap { ed ->
+            listOf(
+                "https://cdn.jsdelivr.net/gh/fawazahmed0/quran-api@1/editions/$ed.min.json",
+                "https://cdn.jsdelivr.net/gh/fawazahmed0/quran-api@1/editions/$ed.json",
+                "https://raw.githubusercontent.com/fawazahmed0/quran-api/1/editions/$ed.min.json",
+                "https://raw.githubusercontent.com/fawazahmed0/quran-api/1/editions/$ed.json"
+            )
+        }
 
         var splitSuccess = false
         for (url in fullUrls) {
@@ -194,10 +201,19 @@ class QuranRepository(private val context: Context) {
             if (cached != null) return cached
         }
 
-        val urls = listOf(
-            "https://cdn.jsdelivr.net/gh/fawazahmed0/quran-api@1/editions/$edition/$chapter.json",
-            "https://raw.githubusercontent.com/fawazahmed0/quran-api/1/editions/$edition/$chapter.json"
-        )
+        val candidateEditions = if (edition == arabicEdition) {
+            listOf(arabicEdition, "ara-quranuthmanienc", "ara-quranacademy")
+        } else {
+            listOf(edition)
+        }
+        val urls = candidateEditions.flatMap { ed ->
+            listOf(
+                "https://cdn.jsdelivr.net/gh/fawazahmed0/quran-api@1/editions/$ed/$chapter.min.json",
+                "https://cdn.jsdelivr.net/gh/fawazahmed0/quran-api@1/editions/$ed/$chapter.json",
+                "https://raw.githubusercontent.com/fawazahmed0/quran-api/1/editions/$ed/$chapter.min.json",
+                "https://raw.githubusercontent.com/fawazahmed0/quran-api/1/editions/$ed/$chapter.json"
+            )
+        }
 
         var lastError: Throwable? = null
         for (url in urls) {
@@ -255,4 +271,71 @@ class QuranRepository(private val context: Context) {
         text.any { ch -> ch in '\u0600'..'\u06FF' || ch in '\u0750'..'\u077F' }
 
     fun getAllSurahs(): List<SurahInfo> = SurahCatalog.surahs
+
+    suspend fun searchOfflineVerses(
+        query: String,
+        translation: QuranTranslationOption,
+        limit: Int = 40
+    ): List<com.example.domain.QuranSearchHit> = withContext(Dispatchers.IO) {
+        val trimmed = query.trim()
+        if (trimmed.length < 2) return@withContext emptyList()
+        val normQuery = normalizeArabicForSearch(trimmed)
+        val hits = ArrayList<com.example.domain.QuranSearchHit>(minOf(limit, 24))
+
+        for (surah in SurahCatalog.surahs) {
+            if (hits.size >= limit) break
+            val arFile = File(cacheDir, "${arabicEdition}_${surah.number}.json")
+            val edFile = File(cacheDir, "${translation.editionId}_${surah.number}.json")
+            if (!arFile.exists() || !edFile.exists()) continue
+
+            val arMap = runCatching {
+                parseAndVerifyChapterJson(arFile.readText(), surah.ayahCount, true)
+            }.getOrNull() ?: continue
+            val enMap = runCatching {
+                parseAndVerifyChapterJson(edFile.readText(), surah.ayahCount, false)
+            }.getOrNull() ?: continue
+
+            for (v in 1..surah.ayahCount) {
+                if (hits.size >= limit) break
+                val arText = arMap[v].orEmpty()
+                val enText = enMap[v].orEmpty()
+                val matchEn = enText.contains(trimmed, ignoreCase = true)
+                val matchAr = normQuery.isNotEmpty() &&
+                    (arText.contains(trimmed) || normalizeArabicForSearch(arText).contains(normQuery))
+                if (matchEn || matchAr) {
+                    hits.add(
+                        com.example.domain.QuranSearchHit(
+                            chapter = surah.number,
+                            verse = v,
+                            surahName = surah.nameEnglish,
+                            arabicText = arText,
+                            englishText = enText
+                        )
+                    )
+                }
+            }
+        }
+        hits
+    }
+
+    companion object {
+        const val DEFAULT_ARABIC_EDITION = "ara-quranuthmanihaf"
+
+        internal fun normalizeArabicForSearch(input: String): String {
+            val sb = StringBuilder(input.length)
+            for (ch in input) {
+                val isDiacritic = ch in '\u064B'..'\u065F' || ch == '\u0670' || ch in '\u06D6'..'\u06ED' || ch == '\u0640'
+                if (!isDiacritic) {
+                    val mapped = when (ch) {
+                        '\u0622', '\u0623', '\u0625', '\u0671' -> '\u0627'
+                        '\u0649' -> '\u064A'
+                        '\u0629' -> '\u0647'
+                        else -> ch
+                    }
+                    sb.append(mapped)
+                }
+            }
+            return sb.toString()
+        }
+    }
 }

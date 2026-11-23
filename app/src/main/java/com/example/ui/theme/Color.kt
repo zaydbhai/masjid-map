@@ -66,3 +66,13 @@ val SurfaceContainerHighestDark = Color(0xFF2A3832)
 
 val ErrorLight = Color(0xFFBA1A1A)
 val ErrorDark = Color(0xFFFFB4AB)
+
+// AMOLED True Black Night Reading Tokens
+val AmoledBackground = Color(0xFF000000)
+val AmoledSurface = Color(0xFF000000)
+val AmoledSurfaceVariant = Color(0xFF141B18)
+val AmoledContainerLowest = Color(0xFF000000)
+val AmoledContainerLow = Color(0xFF090D0B)
+val AmoledContainer = Color(0xFF0F1512)
+val AmoledContainerHigh = Color(0xFF17201C)
+val AmoledContainerHighest = Color(0xFF1F2B26)

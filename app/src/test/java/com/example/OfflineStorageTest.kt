@@ -151,4 +151,24 @@ class OfflineStorageTest {
         masjidRepo.clearOfflineMasjidCache()
         assertEquals(0, masjidRepo.getSavedMasjidsCount())
     }
+
+    @Test
+    fun quranUsesVerifiedUthmaniHafsSlugAndLoadsIntegrityCheckedCacheOffline() = runBlocking {
+        assertEquals("ara-quranuthmanihaf", QuranRepository.DEFAULT_ARABIC_EDITION)
+
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val quranRepo = QuranRepository(context)
+        quranRepo.clearCache()
+
+        val cacheDir = java.io.File(context.filesDir, "quran_cache").apply { mkdirs() }
+        val sampleArabic = """{"chapter":[{"verse":1,"text":"بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ"},{"verse":2,"text":"الْحَمْدُ لِلَّهِ رَبِّ الْعَالَمِينَ"},{"verse":3,"text":"الرَّحْمَٰنِ الرَّحِيمِ"},{"verse":4,"text":"مَالِكِ يَوْمِ الدِّينِ"},{"verse":5,"text":"إِيَّاكَ نَعْبُدُ وَإِيَّاكَ نَسْتَعِينُ"},{"verse":6,"text":"اهْدِنَا الصِّرَاطَ الْمُسْتَقِيمَ"},{"verse":7,"text":"صِرَاطَ الَّذِينَ أَنْعَمْتَ عَلَيْهِمْ غَيْرِ الْمَغْضُوبِ عَلَيْهِمْ وَلَا الضَّالِّينَ"}]}"""
+        val sampleEnglish = """{"chapter":[{"verse":1,"text":"In the name of Allah, the Entirely Merciful, the Especially Merciful."},{"verse":2,"text":"[All] praise is [due] to Allah, Lord of the worlds -"},{"verse":3,"text":"The Entirely Merciful, the Especially Merciful,"},{"verse":4,"text":"Sovereign of the Day of Recompense."},{"verse":5,"text":"It is You we worship and You we ask for help."},{"verse":6,"text":"Guide us to the straight path -"},{"verse":7,"text":"The path of those upon whom You have bestowed favor, not of those who have evoked [Your] anger or of those who are astray."}]}"""
+        java.io.File(cacheDir, "${QuranRepository.DEFAULT_ARABIC_EDITION}_1.json").writeText(sampleArabic)
+        java.io.File(cacheDir, "${QuranTranslationOption.SAHIH_INTERNATIONAL.editionId}_1.json").writeText(sampleEnglish)
+
+        val content = quranRepo.loadSurah(1, QuranTranslationOption.SAHIH_INTERNATIONAL)
+        assertTrue(content.verifiedIntegrity)
+        assertEquals(7, content.verses.size)
+        assertEquals(1, quranRepo.getCachedCountBoth(QuranTranslationOption.SAHIH_INTERNATIONAL.editionId))
+    }
 }

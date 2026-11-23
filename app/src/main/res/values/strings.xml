@@ -15,4 +15,6 @@
     <string name="enable_location_subtitle">Allow location access to locate nearby masjids, compute live travel routes, and display local prayer times.</string>
     <string name="grant_location">Enable Location</string>
     <string name="search_city_instead">Search by city or address instead</string>
+    <string name="widget_name">Prayer Times &amp; Countdown</string>
+    <string name="widget_description">Shows current prayer, next prayer countdown, and daily prayer schedule offline.</string>
 </resources>

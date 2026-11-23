@@ -3,12 +3,16 @@ package com.example.ui
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.BookmarksAndMasjidExtrasRepository
 import com.example.data.HadithRepository
 import com.example.domain.HadithBookCategory
 import com.example.domain.HadithBookInfo
 import com.example.domain.HadithCatalog
 import com.example.domain.HadithChapter
 import com.example.domain.HadithEntry
+import com.example.domain.HadithSearchHit
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -21,7 +25,11 @@ data class HadithUiState(
     val downloadingBookId: String? = null,
     val isDownloadingEssentialPack: Boolean = false,
     val selectedCategory: HadithBookCategory = HadithBookCategory.ALL,
+    val showSavedBookmarks: Boolean = false,
+    val bookmarkedHadiths: List<HadithEntry> = emptyList(),
     val bookSearchQuery: String = "",
+    val globalSearchHits: List<HadithSearchHit> = emptyList(),
+    val isSearchingBooks: Boolean = false,
     val selectedBook: HadithBookInfo? = null,
     val chapters: List<HadithChapter> = emptyList(),
     val selectedChapter: HadithChapter? = null,
@@ -35,6 +43,8 @@ data class HadithUiState(
 class HadithViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = HadithRepository(application)
+    private val extrasRepo = BookmarksAndMasjidExtrasRepository.getInstance(application)
+    private var globalSearchJob: Job? = null
 
     private val _uiState = MutableStateFlow(
         HadithUiState(
@@ -42,6 +52,14 @@ class HadithViewModel(application: Application) : AndroidViewModel(application) 
         )
     )
     val uiState: StateFlow<HadithUiState> = _uiState.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            extrasRepo.hadithBookmarks.collect { saved ->
+                _uiState.update { it.copy(bookmarkedHadiths = saved) }
+            }
+        }
+    }
 
     fun refreshOfflineState() {
         _uiState.update {
@@ -53,9 +71,18 @@ class HadithViewModel(application: Application) : AndroidViewModel(application) 
         _uiState.update {
             it.copy(
                 selectedCategory = category,
+                showSavedBookmarks = false,
                 books = filterBooks(category, it.bookSearchQuery)
             )
         }
+    }
+
+    fun toggleSavedBookmarksView() {
+        _uiState.update { it.copy(showSavedBookmarks = !it.showSavedBookmarks) }
+    }
+
+    fun toggleBookmark(entry: HadithEntry) {
+        extrasRepo.toggleHadithBookmark(entry)
     }
 
     fun onBookSearchChanged(query: String) {
@@ -64,6 +91,18 @@ class HadithViewModel(application: Application) : AndroidViewModel(application) 
                 bookSearchQuery = query,
                 books = filterBooks(it.selectedCategory, query)
             )
+        }
+        globalSearchJob?.cancel()
+        val trimmed = query.trim()
+        if (trimmed.length < 2) {
+            _uiState.update { it.copy(globalSearchHits = emptyList(), isSearchingBooks = false) }
+            return
+        }
+        globalSearchJob = viewModelScope.launch {
+            _uiState.update { it.copy(isSearchingBooks = true) }
+            delay(220L)
+            val hits = repository.searchOfflineCachedBooks(trimmed)
+            _uiState.update { it.copy(globalSearchHits = hits, isSearchingBooks = false) }
         }
     }
 
@@ -206,6 +245,37 @@ class HadithViewModel(application: Application) : AndroidViewModel(application) 
                     it.copy(
                         isLoadingHadiths = false,
                         errorMessage = "Chapter not cached offline yet. Download ${book.titleEnglish} while online to read all chapters offline."
+                    )
+                }
+            }
+        }
+    }
+
+    fun openSearchHit(hit: HadithSearchHit) {
+        val book = HadithCatalog.top21Books.firstOrNull { it.id == hit.bookId } ?: return
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    selectedBook = book,
+                    chapters = emptyList(),
+                    selectedChapter = null,
+                    hadiths = emptyList(),
+                    isLoadingChapters = true,
+                    errorMessage = null
+                )
+            }
+            runCatching {
+                val chapters = repository.getChapters(book)
+                val targetChapter = chapters.firstOrNull { it.id == hit.chapterId } ?: chapters.firstOrNull()
+                _uiState.update { it.copy(isLoadingChapters = false, chapters = chapters) }
+                if (targetChapter != null) {
+                    openChapter(targetChapter)
+                }
+            }.onFailure {
+                _uiState.update {
+                    it.copy(
+                        isLoadingChapters = false,
+                        errorMessage = "Unable to open matched Hadith."
                     )
                 }
             }

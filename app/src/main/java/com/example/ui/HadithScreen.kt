@@ -23,10 +23,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.OfflinePin
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SelfImprovement
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.CircularProgressIndicator
@@ -41,6 +44,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -56,17 +60,22 @@ import com.example.domain.HadithBookCategory
 import com.example.domain.HadithBookInfo
 import com.example.domain.HadithChapter
 import com.example.domain.HadithEntry
+import com.example.domain.HadithSearchHit
 import com.example.ui.theme.LocalReadingTypography
 
 @Composable
 fun HadithScreen(
     onOpenSettings: () -> Unit,
+    onOpenAdhkar: () -> Unit,
     hadithViewModel: HadithViewModel = viewModel(),
     modifier: Modifier = Modifier
 ) {
     val state by hadithViewModel.uiState.collectAsStateWithLifecycle()
     val reading = LocalReadingTypography.current
     val context = LocalContext.current
+    val bookmarkedIds = remember(state.bookmarkedHadiths) {
+        state.bookmarkedHadiths.map { it.id }.toSet()
+    }
 
     BackHandler(enabled = state.selectedBook != null) {
         hadithViewModel.navigateBackInsideHadith()
@@ -137,7 +146,7 @@ fun HadithScreen(
                 OutlinedTextField(
                     value = state.bookSearchQuery,
                     onValueChange = hadithViewModel::onBookSearchChanged,
-                    placeholder = { Text("Search 21 books or compilers…") },
+                    placeholder = { Text("Search 21 books or cached Hadiths…") },
                     leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
                     trailingIcon = {
                         if (state.bookSearchQuery.isNotEmpty()) {
@@ -159,9 +168,35 @@ fun HadithScreen(
                         .horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
+                    FilterChip(
+                        selected = false,
+                        onClick = onOpenAdhkar,
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Filled.SelfImprovement,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        },
+                        label = { Text("Adhkar & Tasbeeh") },
+                        modifier = Modifier.testTag("hadith_open_adhkar_chip")
+                    )
+                    FilterChip(
+                        selected = state.showSavedBookmarks,
+                        onClick = hadithViewModel::toggleSavedBookmarksView,
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Filled.Bookmark,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        },
+                        label = { Text("Saved (${state.bookmarkedHadiths.size})") },
+                        modifier = Modifier.testTag("hadith_saved_chip")
+                    )
                     HadithBookCategory.entries.forEach { category ->
                         FilterChip(
-                            selected = category == state.selectedCategory,
+                            selected = !state.showSavedBookmarks && category == state.selectedCategory,
                             onClick = { hadithViewModel.selectCategory(category) },
                             label = { Text(category.displayName) },
                             modifier = Modifier.testTag("hadith_cat_${category.name}")
@@ -177,15 +212,66 @@ fun HadithScreen(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                items(state.books, key = { it.id }) { book ->
-                    HadithBookCard(
-                        book = book,
-                        isOfflineReady = state.offlineReadyBookIds.contains(book.id),
-                        isDownloading = state.downloadingBookId == book.id,
-                        arabicFontFamily = reading.arabicFontFamily,
-                        onDownloadOffline = { hadithViewModel.downloadBookOffline(book) },
-                        onClick = { hadithViewModel.openBook(book) }
-                    )
+                if (state.showSavedBookmarks) {
+                    if (state.bookmarkedHadiths.isEmpty()) {
+                        item(key = "empty_hadith_bookmarks") {
+                            Surface(
+                                shape = RoundedCornerShape(18.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 12.dp)
+                            ) {
+                                Text(
+                                    text = "No saved Hadiths yet. Tap the bookmark icon on any Hadith to keep it here offline.",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.padding(20.dp)
+                                )
+                            }
+                        }
+                    } else {
+                        items(state.bookmarkedHadiths, key = { "saved_${it.id}" }) { saved ->
+                            HadithNarrationCard(
+                                hadith = saved,
+                                isBookmarked = true,
+                                onToggleBookmark = { hadithViewModel.toggleBookmark(saved) },
+                                onShare = { shareHadith(context, saved) }
+                            )
+                        }
+                    }
+                } else {
+                    if (state.globalSearchHits.isNotEmpty() || state.isSearchingBooks) {
+                        item(key = "hadith_search_hits_header") {
+                            Text(
+                                text = if (state.isSearchingBooks) {
+                                    "Searching offline Hadith cache…"
+                                } else {
+                                    "Offline Hadith Matches (${state.globalSearchHits.size})"
+                                },
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        items(state.globalSearchHits, key = { "hit_${it.bookId}_${it.entry.id}" }) { hit ->
+                            HadithSearchHitCard(
+                                hit = hit,
+                                onClick = { hadithViewModel.openSearchHit(hit) }
+                            )
+                        }
+                    }
+
+                    items(state.books, key = { it.id }) { book ->
+                        HadithBookCard(
+                            book = book,
+                            isOfflineReady = state.offlineReadyBookIds.contains(book.id),
+                            isDownloading = state.downloadingBookId == book.id,
+                            arabicFontFamily = reading.arabicFontFamily,
+                            onDownloadOffline = { hadithViewModel.downloadBookOffline(book) },
+                            onClick = { hadithViewModel.openBook(book) }
+                        )
+                    }
                 }
             }
         } else {
@@ -333,12 +419,45 @@ fun HadithScreen(
                         items(visibleHadiths, key = { it.id }) { hadith ->
                             HadithNarrationCard(
                                 hadith = hadith,
+                                isBookmarked = bookmarkedIds.contains(hadith.id),
+                                onToggleBookmark = { hadithViewModel.toggleBookmark(hadith) },
                                 onShare = { shareHadith(context, hadith) }
                             )
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun HadithSearchHitCard(
+    hit: HadithSearchHit,
+    onClick: () -> Unit
+) {
+    ElevatedCard(
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = "${hit.bookTitle} · ${hit.entry.numberLabel}",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Text(
+                text = hit.entry.englishText,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }
@@ -544,6 +663,8 @@ private fun HadithChapterCard(
 @Composable
 private fun HadithNarrationCard(
     hadith: HadithEntry,
+    isBookmarked: Boolean,
+    onToggleBookmark: () -> Unit,
     onShare: () -> Unit
 ) {
     val reading = LocalReadingTypography.current
@@ -592,16 +713,31 @@ private fun HadithNarrationCard(
                         }
                     }
                 }
-                IconButton(
-                    onClick = onShare,
-                    modifier = Modifier.size(40.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Share,
-                        contentDescription = "Share Hadith",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(18.dp)
-                    )
+                Row {
+                    IconButton(
+                        onClick = onToggleBookmark,
+                        modifier = Modifier
+                            .size(40.dp)
+                            .testTag("bookmark_hadith_${hadith.id}")
+                    ) {
+                        Icon(
+                            imageVector = if (isBookmarked) Icons.Filled.Bookmark else Icons.Filled.BookmarkBorder,
+                            contentDescription = if (isBookmarked) "Remove Hadith bookmark" else "Bookmark Hadith",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = onShare,
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Share,
+                            contentDescription = "Share Hadith",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
             }
 

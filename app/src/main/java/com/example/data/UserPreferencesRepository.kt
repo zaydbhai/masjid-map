@@ -1,16 +1,21 @@
 package com.example.data
 
 import android.content.Context
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.example.domain.AppThemeMode
 import com.example.domain.ArabicFontOption
 import com.example.domain.AsrMadhab
 import com.example.domain.CalculationMethod
 import com.example.domain.EnglishFontOption
 import com.example.domain.LatLngPoint
+import com.example.domain.PrayerAlertSound
+import com.example.domain.PrayerName
 import com.example.domain.QuranTranslationOption
 import com.example.domain.TravelMode
 import kotlinx.coroutines.flow.Flow
@@ -28,8 +33,33 @@ data class UserSettings(
     val englishFontSizeSp: Float = 16f,
     val quranTranslation: QuranTranslationOption = QuranTranslationOption.SAHIH_INTERNATIONAL,
     val lastLocation: LatLngPoint? = null,
-    val lastLocationLabel: String? = null
-)
+    val lastLocationLabel: String? = null,
+    val themeMode: AppThemeMode = AppThemeMode.SYSTEM,
+    val arabicOnlyQuran: Boolean = false,
+    val lastReadSurah: Int = 1,
+    val lastReadAyah: Int = 1,
+    val notificationsEnabled: Boolean = false,
+    val notifyFajr: Boolean = true,
+    val notifyDhuhr: Boolean = true,
+    val notifyAsr: Boolean = true,
+    val notifyMaghrib: Boolean = true,
+    val notifyIsha: Boolean = true,
+    val reminderLeadMinutes: Int = 0,
+    val alertSound: PrayerAlertSound = PrayerAlertSound.DEFAULT_CHIME,
+    val tasbeehPresetId: String = "subhanallah",
+    val tasbeehCount: Int = 0,
+    val tasbeehTarget: Int = 33,
+    val tasbeehLifetimeTotal: Int = 0
+) {
+    fun isPrayerAlertEnabled(name: PrayerName): Boolean = when (name) {
+        PrayerName.FAJR -> notifyFajr
+        PrayerName.SUNRISE -> false
+        PrayerName.DHUHR -> notifyDhuhr
+        PrayerName.ASR -> notifyAsr
+        PrayerName.MAGHRIB -> notifyMaghrib
+        PrayerName.ISHA -> notifyIsha
+    }
+}
 
 class UserPreferencesRepository(private val context: Context) {
 
@@ -45,6 +75,22 @@ class UserPreferencesRepository(private val context: Context) {
         val LAST_LAT = doublePreferencesKey("last_location_lat")
         val LAST_LNG = doublePreferencesKey("last_location_lng")
         val LAST_LABEL = stringPreferencesKey("last_location_label")
+        val THEME_MODE = stringPreferencesKey("theme_mode")
+        val ARABIC_ONLY_QURAN = booleanPreferencesKey("arabic_only_quran")
+        val LAST_READ_SURAH = intPreferencesKey("last_read_surah")
+        val LAST_READ_AYAH = intPreferencesKey("last_read_ayah")
+        val NOTIFICATIONS_ENABLED = booleanPreferencesKey("notifications_enabled")
+        val NOTIFY_FAJR = booleanPreferencesKey("notify_fajr")
+        val NOTIFY_DHUHR = booleanPreferencesKey("notify_dhuhr")
+        val NOTIFY_ASR = booleanPreferencesKey("notify_asr")
+        val NOTIFY_MAGHRIB = booleanPreferencesKey("notify_maghrib")
+        val NOTIFY_ISHA = booleanPreferencesKey("notify_isha")
+        val REMINDER_LEAD_MINUTES = intPreferencesKey("reminder_lead_minutes")
+        val ALERT_SOUND = stringPreferencesKey("alert_sound")
+        val TASBEEH_PRESET_ID = stringPreferencesKey("tasbeeh_preset_id")
+        val TASBEEH_COUNT = intPreferencesKey("tasbeeh_count")
+        val TASBEEH_TARGET = intPreferencesKey("tasbeeh_target")
+        val TASBEEH_LIFETIME = intPreferencesKey("tasbeeh_lifetime")
     }
 
     val settingsFlow: Flow<UserSettings> = context.dataStore.data.map { prefs ->
@@ -62,7 +108,23 @@ class UserPreferencesRepository(private val context: Context) {
             englishFontSizeSp = (prefs[Keys.ENGLISH_FONT_SIZE] ?: 16f).coerceIn(13f, 24f),
             quranTranslation = QuranTranslationOption.fromId(prefs[Keys.QURAN_TRANSLATION]),
             lastLocation = savedPoint,
-            lastLocationLabel = prefs[Keys.LAST_LABEL]
+            lastLocationLabel = prefs[Keys.LAST_LABEL],
+            themeMode = AppThemeMode.fromId(prefs[Keys.THEME_MODE]),
+            arabicOnlyQuran = prefs[Keys.ARABIC_ONLY_QURAN] ?: false,
+            lastReadSurah = (prefs[Keys.LAST_READ_SURAH] ?: 1).coerceIn(1, 114),
+            lastReadAyah = (prefs[Keys.LAST_READ_AYAH] ?: 1).coerceAtLeast(1),
+            notificationsEnabled = prefs[Keys.NOTIFICATIONS_ENABLED] ?: false,
+            notifyFajr = prefs[Keys.NOTIFY_FAJR] ?: true,
+            notifyDhuhr = prefs[Keys.NOTIFY_DHUHR] ?: true,
+            notifyAsr = prefs[Keys.NOTIFY_ASR] ?: true,
+            notifyMaghrib = prefs[Keys.NOTIFY_MAGHRIB] ?: true,
+            notifyIsha = prefs[Keys.NOTIFY_ISHA] ?: true,
+            reminderLeadMinutes = prefs[Keys.REMINDER_LEAD_MINUTES] ?: 0,
+            alertSound = PrayerAlertSound.fromId(prefs[Keys.ALERT_SOUND]),
+            tasbeehPresetId = prefs[Keys.TASBEEH_PRESET_ID] ?: "subhanallah",
+            tasbeehCount = prefs[Keys.TASBEEH_COUNT] ?: 0,
+            tasbeehTarget = prefs[Keys.TASBEEH_TARGET] ?: 33,
+            tasbeehLifetimeTotal = prefs[Keys.TASBEEH_LIFETIME] ?: 0
         )
     }
 
@@ -103,6 +165,57 @@ class UserPreferencesRepository(private val context: Context) {
             it[Keys.LAST_LAT] = point.latitude
             it[Keys.LAST_LNG] = point.longitude
             it[Keys.LAST_LABEL] = label
+        }
+    }
+
+    suspend fun setThemeMode(mode: AppThemeMode) {
+        context.dataStore.edit { it[Keys.THEME_MODE] = mode.id }
+    }
+
+    suspend fun setArabicOnlyQuran(arabicOnly: Boolean) {
+        context.dataStore.edit { it[Keys.ARABIC_ONLY_QURAN] = arabicOnly }
+    }
+
+    suspend fun setLastReadPosition(surah: Int, ayah: Int) {
+        context.dataStore.edit {
+            it[Keys.LAST_READ_SURAH] = surah.coerceIn(1, 114)
+            it[Keys.LAST_READ_AYAH] = ayah.coerceAtLeast(1)
+        }
+    }
+
+    suspend fun setNotificationsEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.NOTIFICATIONS_ENABLED] = enabled }
+    }
+
+    suspend fun togglePrayerNotification(prayer: PrayerName) {
+        context.dataStore.edit { prefs ->
+            val key = when (prayer) {
+                PrayerName.FAJR -> Keys.NOTIFY_FAJR
+                PrayerName.DHUHR -> Keys.NOTIFY_DHUHR
+                PrayerName.ASR -> Keys.NOTIFY_ASR
+                PrayerName.MAGHRIB -> Keys.NOTIFY_MAGHRIB
+                PrayerName.ISHA -> Keys.NOTIFY_ISHA
+                PrayerName.SUNRISE -> return@edit
+            }
+            val current = prefs[key] ?: true
+            prefs[key] = !current
+        }
+    }
+
+    suspend fun setReminderLeadMinutes(minutes: Int) {
+        context.dataStore.edit { it[Keys.REMINDER_LEAD_MINUTES] = minutes.coerceIn(0, 45) }
+    }
+
+    suspend fun setAlertSound(sound: PrayerAlertSound) {
+        context.dataStore.edit { it[Keys.ALERT_SOUND] = sound.id }
+    }
+
+    suspend fun saveTasbeehState(presetId: String, count: Int, target: Int, lifetimeTotal: Int) {
+        context.dataStore.edit {
+            it[Keys.TASBEEH_PRESET_ID] = presetId
+            it[Keys.TASBEEH_COUNT] = count
+            it[Keys.TASBEEH_TARGET] = target
+            it[Keys.TASBEEH_LIFETIME] = lifetimeTotal
         }
     }
 }

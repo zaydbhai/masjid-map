@@ -33,16 +33,19 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.NearMe
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.Mosque
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -51,6 +54,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -77,10 +81,18 @@ fun MasjidMapScreen(
     viewModel: MasjidMapViewModel,
     onRequestLocationPermission: () -> Unit,
     onOpenOfflineSheet: () -> Unit,
+    onOpenQiblaSheet: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
+    val visibleMasjids = remember(state.masjids, state.showOnlyFavoriteMasjids, state.favoriteMasjidIds) {
+        if (state.showOnlyFavoriteMasjids) {
+            state.masjids.filter { state.favoriteMasjidIds.contains(it.id) }
+        } else {
+            state.masjids
+        }
+    }
 
     BackHandler(
         enabled = state.activeRoute != null || state.viewMode == ViewMode.LIST
@@ -97,7 +109,7 @@ fun MasjidMapScreen(
                 isOnline = state.isOnline,
                 userLocation = state.userLocation,
                 mapCenter = state.mapCenter,
-                masjids = state.masjids,
+                masjids = visibleMasjids,
                 selectedMasjid = state.selectedMasjid,
                 activeRoute = state.activeRoute,
                 recenterTick = state.recenterTick,
@@ -112,12 +124,16 @@ fun MasjidMapScreen(
                     .padding(top = 114.dp)
             ) {
                 MasjidListView(
-                    masjids = state.masjids,
+                    masjids = visibleMasjids,
                     selectedMasjid = state.selectedMasjid,
+                    favoriteMasjidIds = state.favoriteMasjidIds,
                     travelMode = state.travelMode,
                     isLoading = state.isLoadingMasjids,
                     onSelectOnMap = { masjid ->
                         viewModel.selectMasjid(masjid, switchToMap = true)
+                    },
+                    onToggleFavorite = { masjid ->
+                        viewModel.toggleFavoriteMasjid(masjid.id)
                     },
                     onRoute = { masjid -> viewModel.requestRouteTo(masjid) },
                     onShowPrayerTimes = { masjid -> viewModel.openPrayerSheet(masjid) },
@@ -164,14 +180,18 @@ fun MasjidMapScreen(
             }
 
             QuickActionChipsRow(
-                masjids = state.masjids,
+                masjids = visibleMasjids,
                 selectedMasjid = state.selectedMasjid,
                 radiusKm = state.searchRadiusKm,
+                showOnlyFavorites = state.showOnlyFavoriteMasjids,
+                favoritesCount = state.favoriteMasjidIds.size,
+                onToggleFavoritesFilter = viewModel::toggleFavoritesFilter,
+                onOpenQibla = onOpenQiblaSheet,
                 onSelectNearest = viewModel::selectNearestMasjid,
                 onCycleRadius = viewModel::cycleSearchRadius,
                 onOpenOfflineSheet = onOpenOfflineSheet,
                 onOpenNearestPrayerTimes = {
-                    val target = state.selectedMasjid ?: state.masjids.firstOrNull()
+                    val target = state.selectedMasjid ?: visibleMasjids.firstOrNull()
                     if (target != null) viewModel.openPrayerSheet(target)
                 }
             )
@@ -244,7 +264,9 @@ fun MasjidMapScreen(
                     SelectedMasjidCard(
                         masjid = selected,
                         travelMode = state.travelMode,
+                        isFavorite = state.favoriteMasjidIds.contains(selected.id),
                         isLoadingRoute = state.isLoadingRoute,
+                        onToggleFavorite = { viewModel.toggleFavoriteMasjid(selected.id) },
                         onShowRoute = { m -> viewModel.requestRouteTo(m) },
                         onShowPrayerTimes = viewModel::openPrayerSheet,
                         onStartExternalNav = { m -> launchExternalNavigation(context, m, state.travelMode) }
@@ -387,6 +409,10 @@ private fun QuickActionChipsRow(
     masjids: List<Masjid>,
     selectedMasjid: Masjid?,
     radiusKm: Int,
+    showOnlyFavorites: Boolean,
+    favoritesCount: Int,
+    onToggleFavoritesFilter: () -> Unit,
+    onOpenQibla: () -> Unit,
     onSelectNearest: () -> Unit,
     onCycleRadius: () -> Unit,
     onOpenOfflineSheet: () -> Unit,
@@ -402,6 +428,40 @@ private fun QuickActionChipsRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        AssistChip(
+            onClick = onOpenQibla,
+            label = { Text("Qibla") },
+            leadingIcon = {
+                Icon(
+                    imageVector = Icons.Filled.Explore,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+            },
+            colors = AssistChipDefaults.assistChipColors(
+                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+                labelColor = MaterialTheme.colorScheme.primary,
+                leadingIconContentColor = MaterialTheme.colorScheme.primary
+            ),
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.testTag("masjids_qibla_chip")
+        )
+
+        FilterChip(
+            selected = showOnlyFavorites,
+            onClick = onToggleFavoritesFilter,
+            label = { Text(if (favoritesCount > 0) "Favorites ($favoritesCount)" else "Favorites") },
+            leadingIcon = {
+                Icon(
+                    imageVector = Icons.Filled.Star,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+            },
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.testTag("masjids_favorites_chip")
+        )
+
         AssistChip(
             onClick = onOpenOfflineSheet,
             label = { Text("Save Offline") },
