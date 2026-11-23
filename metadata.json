@@ -1,0 +1,6 @@
+{
+  "name": "Masjid Map",
+  "description": "Offline-ready Islamic companion for nearby masjids on OpenStreetMap, routes, live prayer times, verified Qur'an with Sahih International, and 21 Hadith books.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

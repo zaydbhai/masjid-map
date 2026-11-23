@@ -1,0 +1,18 @@
+<resources>
+    <string name="app_name">Masjid Map</string>
+    <string name="search_masjids_hint">Search area or masjid…</string>
+    <string name="mode_map">Map</string>
+    <string name="mode_list">List</string>
+    <string name="action_route">Route</string>
+    <string name="action_prayer_times">Prayer Times</string>
+    <string name="action_start_navigation">Start Navigation</string>
+    <string name="action_recenter">Recenter on my location</string>
+    <string name="action_settings">Prayer calculation settings</string>
+    <string name="action_clear_route">Clear route</string>
+    <string name="travel_drive">Drive</string>
+    <string name="travel_walk">Walk</string>
+    <string name="enable_location_title">Find Masjids Near You</string>
+    <string name="enable_location_subtitle">Allow location access to locate nearby masjids, compute live travel routes, and display local prayer times.</string>
+    <string name="grant_location">Enable Location</string>
+    <string name="search_city_instead">Search by city or address instead</string>
+</resources>
