@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.SelfImprovement
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Widgets
 import androidx.compose.material.icons.outlined.Mosque
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -77,6 +78,7 @@ fun HomeScreen(
     onRequestLocation: () -> Unit,
     onOpenOfflineSheet: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenWidgetCustomizer: () -> Unit,
     onOpenQibla: () -> Unit,
     onOpenAdhkar: () -> Unit,
     onOpenHijriDialog: () -> Unit,
@@ -186,6 +188,19 @@ fun HomeScreen(
                         imageVector = Icons.Filled.CloudDownload,
                         contentDescription = "Offline Downloads & Maps",
                         tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+
+                IconButton(
+                    onClick = onOpenWidgetCustomizer,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .testTag("home_widget_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Widgets,
+                        contentDescription = "Customize Home Widget",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
 

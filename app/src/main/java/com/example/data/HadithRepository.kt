@@ -124,6 +124,30 @@ class HadithRepository(private val context: Context) {
         HadithCatalog.authenticDailySeeds[seed % HadithCatalog.authenticDailySeeds.size]
     }
 
+    fun getCachedOrSeedDailyHadith(): HadithEntry {
+        val dayKey = SimpleDateFormat("yyyyMMdd", Locale.US).format(Date())
+        val dailyCache = File(cacheDir, "daily_$dayKey.json")
+        if (dailyCache.exists()) {
+            runCatching {
+                val obj = JSONObject(dailyCache.readText())
+                return HadithEntry(
+                    id = obj.getString("id"),
+                    numberLabel = obj.getString("numberLabel"),
+                    bookTitle = obj.getString("bookTitle"),
+                    chapterTitle = obj.getString("chapterTitle"),
+                    arabicText = obj.getString("arabicText"),
+                    narrator = obj.getString("narrator"),
+                    englishText = obj.getString("englishText"),
+                    grade = obj.optString("grade").takeIf { it.isNotBlank() },
+                    reference = obj.optString("reference")
+                )
+            }
+        }
+        val cal = Calendar.getInstance()
+        val seed = cal.get(Calendar.YEAR) * 366 + cal.get(Calendar.DAY_OF_YEAR)
+        return HadithCatalog.authenticDailySeeds[seed % HadithCatalog.authenticDailySeeds.size]
+    }
+
     private fun saveDailyCache(file: File, entry: HadithEntry) {
         runCatching {
             val obj = JSONObject().apply {

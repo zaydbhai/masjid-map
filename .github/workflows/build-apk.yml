@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build Android Release APK
 
 on:
   push:
@@ -12,7 +12,7 @@ permissions:
   contents: write
 
 jobs:
-  build-apk:
+  build-release-apk:
     runs-on: ubuntu-latest
 
     steps:
@@ -39,65 +39,53 @@ jobs:
         with:
           gradle-version: '9.3.1'
 
-      - name: Generate debug keystore if absent
-        run: |
-          if [ ! -f debug.keystore ]; then
-            keytool -genkeypair -v \
-              -keystore debug.keystore \
-              -storepass android \
-              -alias androiddebugkey \
-              -keypass android \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -dname "CN=Android Debug,O=Android,C=US"
-          fi
-
       - name: Verify Gradle toolchain
         run: gradle --version
 
       - name: Run unit & Robolectric tests
         run: gradle :app:testDebugUnitTest --no-daemon --stacktrace
 
-      - name: Build Debug APK
-        run: gradle :app:assembleDebug --no-daemon --stacktrace
-
-      - name: Upload Debug APK artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: masjid-map-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
-          retention-days: 30
-
-      - name: Build Signed Release APK (when keystore secrets are set)
+      - name: Build Signed Release APK
+        if: github.event_name != 'pull_request'
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$STORE_PASSWORD" ] && [ -n "$KEY_PASSWORD" ]; then
-            echo "$KEYSTORE_BASE64" | base64 -d > my-upload-key.jks
-            export KEYSTORE_PATH="$PWD/my-upload-key.jks"
-            gradle :app:assembleRelease --no-daemon --stacktrace
-            rm -f my-upload-key.jks
-          else
-            echo "Skipping Release APK (add KEYSTORE_BASE64, STORE_PASSWORD, and KEY_PASSWORD repo secrets for non-debuggable signed APK)."
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$STORE_PASSWORD" ] || [ -z "$KEY_PASSWORD" ]; then
+            echo "::error::Missing KEYSTORE_BASE64, STORE_PASSWORD, or KEY_PASSWORD repository secrets."
+            exit 1
           fi
+          echo "$KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > my-upload-key.jks
+          export KEYSTORE_PATH="$PWD/my-upload-key.jks"
+          gradle :app:assembleRelease --no-daemon --stacktrace
+          rm -f my-upload-key.jks
+          cp app/build/outputs/apk/release/app-release.apk MasjidMap-release.apk
+          APKSIGNER="${ANDROID_HOME:-$ANDROID_SDK_ROOT}/build-tools/36.0.0/apksigner"
+          "$APKSIGNER" verify --verbose --print-certs MasjidMap-release.apk
+          sha256sum MasjidMap-release.apk > MasjidMap-release.apk.sha256
 
-      - name: Upload Signed Release APK artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: masjid-map-release-apk
-          path: app/build/outputs/apk/release/app-release.apk
-          if-no-files-found: ignore
-          retention-days: 30
-
-      - name: Attach APK to GitHub Release (on version tags)
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v3
-        with:
-          files: |
-            app/build/outputs/apk/debug/app-debug.apk
-            app/build/outputs/apk/release/app-release.apk
-          fail_on_unmatched_files: false
-
+      - name: Publish Release APK to GitHub Releases tab
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            TAG_NAME="${{ github.ref_name }}"
+            RELEASE_TITLE="Masjid Map ${TAG_NAME}"
+            VERSIONED_APK="MasjidMap-${TAG_NAME}.apk"
+            cp MasjidMap-release.apk "$VERSIONED_APK"
+            sha256sum "$VERSIONED_APK" > "${VERSIONED_APK}.sha256"
+            gh release view "$TAG_NAME" >/dev/null 2>&1 || gh release create "$TAG_NAME" --title "$RELEASE_TITLE" --notes "Signed Release APK for Masjid Map (${TAG_NAME})."
+            gh release upload "$TAG_NAME" "$VERSIONED_APK" "${VERSIONED_APK}.sha256" --clobber
+          else
+            TAG_NAME="latest"
+            RELEASE_TITLE="Masjid Map · Latest Release"
+            NOTES="Automatically built signed Release APK from commit ${GITHUB_SHA::7}."
+            if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+              gh release edit "$TAG_NAME" --tag "$TAG_NAME" --target "$GITHUB_SHA" --title "$RELEASE_TITLE" --notes "$NOTES"
+            else
+              gh release create "$TAG_NAME" --target "$GITHUB_SHA" --title "$RELEASE_TITLE" --notes "$NOTES"
+            fi
+            gh release upload "$TAG_NAME" MasjidMap-release.apk MasjidMap-release.apk.sha256 --clobber
+          fi

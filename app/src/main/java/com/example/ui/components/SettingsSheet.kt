@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.Widgets
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
@@ -81,6 +82,7 @@ fun SettingsSheet(
     onSelectLeadMinutes: (Int) -> Unit,
     onSelectAlertSound: (PrayerAlertSound) -> Unit,
     onSendTestNotification: () -> Unit,
+    onOpenWidgetCustomizer: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -127,6 +129,23 @@ fun SettingsSheet(
                             modifier = Modifier.testTag("theme_mode_${mode.id}")
                         )
                     }
+                }
+
+                FilledTonalButton(
+                    onClick = onOpenWidgetCustomizer,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("open_widget_customizer_from_settings")
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Widgets,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.height(0.dp).padding(horizontal = 4.dp))
+                    Text("Customize Home Screen Widget & Tiles")
                 }
             }
 

@@ -3,6 +3,7 @@ package com.example.ui
 import android.content.Context
 import android.content.Intent
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -28,15 +29,23 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.MenuBook
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
-import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.OfflinePin
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Verified
@@ -74,9 +83,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.domain.JuzInfo
 import com.example.domain.QuranBookmark
+import com.example.domain.QuranReciterOption
 import com.example.domain.QuranSearchHit
 import com.example.domain.QuranTranslationOption
 import com.example.domain.QuranVerse
+import com.example.domain.RecitationLanguage
 import com.example.domain.SurahCatalog
 import com.example.domain.SurahContent
 import com.example.domain.SurahInfo
@@ -171,12 +182,13 @@ fun QuranScreen(
                         .testTag("quran_search_input")
                 )
 
-                // Browse mode chips: Surahs / Juz / Bookmarks
+                // Browse mode chips: Surahs / Juz / Bookmarks + Reciter quick switcher
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     QuranBrowseMode.entries.forEach { mode ->
                         val chipLabel = when (mode) {
@@ -190,6 +202,10 @@ fun QuranScreen(
                             modifier = Modifier.testTag("quran_mode_${mode.name.lowercase()}")
                         )
                     }
+                    ReciterDropdownButton(
+                        selected = state.selectedReciter,
+                        onSelect = quranViewModel::selectReciter
+                    )
                 }
 
                 // Offline Quran Readiness & 1-Tap 114-Surah Download Bar
@@ -402,16 +418,24 @@ fun QuranScreen(
         } else {
             SurahReaderView(
                 content = activeSurah,
-                isLoading = state.isLoadingSurah,
-                selectedTranslation = state.selectedTranslation,
-                arabicOnlyMode = state.arabicOnlyMode,
-                targetScrollAyah = state.targetScrollAyah,
+                uiState = state,
                 bookmarkedKeys = bookmarkedKeys,
                 onBack = quranViewModel::closeSurah,
                 onToggleArabicOnly = quranViewModel::toggleArabicOnlyMode,
                 onToggleBookmark = { verse -> quranViewModel.toggleBookmark(activeSurah.surah, verse) },
                 onAyahVisible = { ayahNum -> quranViewModel.markAyahRead(activeSurah.surah.number, ayahNum) },
                 onSelectTranslation = quranViewModel::selectTranslation,
+                onSelectLanguage = quranViewModel::selectRecitationLanguage,
+                onSelectReciter = quranViewModel::selectReciter,
+                onTogglePlayAyah = { ayahNum -> quranViewModel.togglePlayAyah(activeSurah.surah.number, ayahNum) },
+                onTogglePlayPauseSurah = quranViewModel::togglePlayPauseSurah,
+                onNextAyah = quranViewModel::playNextAyah,
+                onPrevAyah = quranViewModel::playPreviousAyah,
+                onCycleSpeed = quranViewModel::cyclePlaybackSpeed,
+                onToggleAutoAdvance = quranViewModel::toggleAutoAdvance,
+                onStopAudio = quranViewModel::stopAudio,
+                onDownloadSurahAudio = quranViewModel::downloadActiveSurahAudio,
+                onClearAudioError = quranViewModel::clearAudioError,
                 onOpenSettings = onOpenSettings,
                 onOpenSurah = { num -> quranViewModel.openSurah(num) },
                 onShareVerse = { verse -> shareQuranVerse(context, activeSurah.surah, verse, activeSurah.translation) }
@@ -668,16 +692,24 @@ private fun SurahIndexRow(
 @Composable
 private fun SurahReaderView(
     content: SurahContent,
-    isLoading: Boolean,
-    selectedTranslation: QuranTranslationOption,
-    arabicOnlyMode: Boolean,
-    targetScrollAyah: Int,
+    uiState: QuranUiState,
     bookmarkedKeys: Set<Pair<Int, Int>>,
     onBack: () -> Unit,
     onToggleArabicOnly: () -> Unit,
     onToggleBookmark: (QuranVerse) -> Unit,
     onAyahVisible: (Int) -> Unit,
     onSelectTranslation: (QuranTranslationOption) -> Unit,
+    onSelectLanguage: (RecitationLanguage) -> Unit,
+    onSelectReciter: (QuranReciterOption) -> Unit,
+    onTogglePlayAyah: (Int) -> Unit,
+    onTogglePlayPauseSurah: () -> Unit,
+    onNextAyah: () -> Unit,
+    onPrevAyah: () -> Unit,
+    onCycleSpeed: () -> Unit,
+    onToggleAutoAdvance: () -> Unit,
+    onStopAudio: () -> Unit,
+    onDownloadSurahAudio: () -> Unit,
+    onClearAudioError: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenSurah: (Int) -> Unit,
     onShareVerse: (QuranVerse) -> Unit
@@ -686,11 +718,24 @@ private fun SurahReaderView(
     val surah = content.surah
     val listState = rememberLazyListState()
 
-    LaunchedEffect(content.surah.number, targetScrollAyah) {
-        if (targetScrollAyah > 1 && content.verses.isNotEmpty()) {
-            val verseIdx = content.verses.indexOfFirst { it.verse >= targetScrollAyah }
+    LaunchedEffect(content.surah.number, uiState.targetScrollAyah) {
+        if (uiState.targetScrollAyah > 1 && content.verses.isNotEmpty()) {
+            val verseIdx = content.verses.indexOfFirst { it.verse >= uiState.targetScrollAyah }
             if (verseIdx >= 0) {
                 listState.scrollToItem(verseIdx + 1)
+            }
+        }
+    }
+
+    LaunchedEffect(uiState.playingSurah, uiState.playingAyah, content.surah.number) {
+        val activeAyah = uiState.playingAyah
+        if (uiState.playingSurah == content.surah.number && activeAyah != null && content.verses.isNotEmpty()) {
+            val verseIdx = content.verses.indexOfFirst { it.verse == activeAyah }
+            if (verseIdx >= 0) {
+                val visible = listState.layoutInfo.visibleItemsInfo.any { it.index == verseIdx + 1 }
+                if (!visible) {
+                    listState.animateScrollToItem(verseIdx + 1)
+                }
             }
         }
     }
@@ -751,7 +796,7 @@ private fun SurahReaderView(
                             }
                         }
                         Text(
-                            text = if (arabicOnlyMode) {
+                            text = if (uiState.arabicOnlyMode) {
                                 "Arabic Only (Mushaf) · ${surah.ayahCount} Ayahs"
                             } else {
                                 "${content.translation.displayName} · ${surah.ayahCount} Ayahs"
@@ -770,14 +815,14 @@ private fun SurahReaderView(
                             .testTag("quran_arabic_only_toggle")
                     ) {
                         Icon(
-                            imageVector = Icons.Filled.MenuBook,
-                            contentDescription = if (arabicOnlyMode) "Show translation" else "Arabic-only Mushaf mode",
-                            tint = if (arabicOnlyMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            imageVector = Icons.AutoMirrored.Filled.MenuBook,
+                            contentDescription = if (uiState.arabicOnlyMode) "Show translation" else "Arabic-only Mushaf mode",
+                            tint = if (uiState.arabicOnlyMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
 
                     TranslationDropdownButton(
-                        selected = selectedTranslation,
+                        selected = uiState.selectedTranslation,
                         onSelect = onSelectTranslation
                     )
 
@@ -791,12 +836,150 @@ private fun SurahReaderView(
                         )
                     }
                 }
+
+                // Recitation Audio Bar: Arabic / Urdu / English + Voice Picker + Offline Surah Audio
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 12.dp, end = 12.dp, bottom = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RecitationLanguage.entries.forEach { lang ->
+                            FilterChip(
+                                selected = uiState.selectedReciter.language == lang,
+                                onClick = { onSelectLanguage(lang) },
+                                label = { Text(lang.displayName) },
+                                leadingIcon = if (uiState.selectedReciter.language == lang) {
+                                    {
+                                        Icon(
+                                            imageVector = Icons.AutoMirrored.Filled.VolumeUp,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                } else {
+                                    null
+                                },
+                                modifier = Modifier.testTag("recitation_lang_${lang.id}")
+                            )
+                        }
+
+                        ReciterDropdownButton(
+                            selected = uiState.selectedReciter,
+                            onSelect = onSelectReciter
+                        )
+
+                        val isThisSurahPlaying = uiState.playingSurah == surah.number && uiState.isPlayingAudio
+                        FilledTonalButton(
+                            onClick = onTogglePlayPauseSurah,
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier
+                                .height(40.dp)
+                                .testTag("play_surah_button")
+                        ) {
+                            Icon(
+                                imageVector = if (isThisSurahPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                                contentDescription = if (isThisSurahPlaying) "Pause Surah recitation" else "Play Surah recitation",
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(if (isThisSurahPlaying) "Pause" else "Listen")
+                        }
+
+                        val allAudioCached = uiState.cachedAudioAyahsForActiveSurah >= surah.ayahCount
+                        FilledTonalButton(
+                            onClick = onDownloadSurahAudio,
+                            enabled = !allAudioCached && !uiState.isDownloadingSurahAudio,
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier
+                                .height(40.dp)
+                                .testTag("download_surah_audio_button")
+                        ) {
+                            Icon(
+                                imageVector = if (allAudioCached) Icons.Filled.OfflinePin else Icons.Filled.CloudDownload,
+                                contentDescription = "Save Surah audio offline",
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                when {
+                                    uiState.isDownloadingSurahAudio -> "${uiState.surahAudioDownloadProgress}/${surah.ayahCount}"
+                                    allAudioCached -> "Audio Offline"
+                                    uiState.cachedAudioAyahsForActiveSurah > 0 -> "Save (${uiState.cachedAudioAyahsForActiveSurah}/${surah.ayahCount})"
+                                    else -> "Save Audio"
+                                }
+                            )
+                        }
+                    }
+
+                    if (uiState.isDownloadingSurahAudio) {
+                        LinearProgressIndicator(
+                            progress = {
+                                (uiState.surahAudioDownloadProgress.toFloat() / surah.ayahCount.coerceAtLeast(1))
+                                    .coerceIn(0f, 1f)
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(6.dp))
+                        )
+                    }
+                }
             }
         }
 
-        if (isLoading) {
+        if (uiState.audioErrorMessage != null) {
+            Surface(
+                color = MaterialTheme.colorScheme.errorContainer,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = uiState.audioErrorMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.weight(1f)
+                    )
+                    IconButton(
+                        onClick = onClearAudioError,
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Close,
+                            contentDescription = "Dismiss audio error",
+                            tint = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        if (uiState.isLoadingSurah) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                    Text(
+                        text = "Loading & verifying Surah from GitHub…",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
             return
         }
@@ -854,8 +1037,23 @@ private fun SurahReaderView(
 
             items(content.verses, key = { it.verse }) { verse ->
                 val isBookmarked = bookmarkedKeys.contains(verse.chapter to verse.verse)
-                ElevatedCard(
+                val isCurrentTrack = uiState.playingSurah == verse.chapter && uiState.playingAyah == verse.verse
+                val isThisPlaying = isCurrentTrack && uiState.isPlayingAudio
+                val isThisBuffering = isCurrentTrack && uiState.isBufferingAudio
+
+                Surface(
                     shape = RoundedCornerShape(18.dp),
+                    color = if (isCurrentTrack) {
+                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.28f)
+                    } else {
+                        MaterialTheme.colorScheme.surfaceContainerLow
+                    },
+                    border = if (isCurrentTrack) {
+                        BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
+                    } else {
+                        null
+                    },
+                    tonalElevation = if (isCurrentTrack) 4.dp else 1.dp,
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("ayah_card_${verse.verse}")
@@ -869,22 +1067,76 @@ private fun SurahReaderView(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = MaterialTheme.colorScheme.primaryContainer
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Text(
-                                    text = "${verse.chapter}:${verse.verse}",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                                )
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = MaterialTheme.colorScheme.primaryContainer
+                                ) {
+                                    Text(
+                                        text = "${verse.chapter}:${verse.verse}",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                    )
+                                }
+                                if (isCurrentTrack) {
+                                    Surface(
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = MaterialTheme.colorScheme.primary
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.GraphicEq,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.onPrimary,
+                                                modifier = Modifier.size(12.dp)
+                                            )
+                                            Text(
+                                                text = uiState.selectedReciter.language.badge,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onPrimary
+                                            )
+                                        }
+                                    }
+                                }
                             }
-                            Row {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(
+                                    onClick = { onTogglePlayAyah(verse.verse) },
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .testTag("play_ayah_${verse.verse}")
+                                ) {
+                                    if (isThisBuffering) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(18.dp),
+                                            strokeWidth = 2.dp,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    } else {
+                                        Icon(
+                                            imageVector = if (isThisPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                                            contentDescription = if (isThisPlaying) {
+                                                "Pause Ayah ${verse.chapter}:${verse.verse}"
+                                            } else {
+                                                "Play Ayah ${verse.chapter}:${verse.verse} (${uiState.selectedReciter.language.displayName})"
+                                            },
+                                            tint = if (isCurrentTrack) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(22.dp)
+                                        )
+                                    }
+                                }
                                 IconButton(
                                     onClick = { onToggleBookmark(verse) },
                                     modifier = Modifier
-                                        .size(40.dp)
+                                        .size(48.dp)
                                         .testTag("bookmark_ayah_${verse.verse}")
                                 ) {
                                     Icon(
@@ -896,7 +1148,7 @@ private fun SurahReaderView(
                                 }
                                 IconButton(
                                     onClick = { onShareVerse(verse) },
-                                    modifier = Modifier.size(40.dp)
+                                    modifier = Modifier.size(48.dp)
                                 ) {
                                     Icon(
                                         imageVector = Icons.Filled.Share,
@@ -918,7 +1170,7 @@ private fun SurahReaderView(
                             modifier = Modifier.fillMaxWidth()
                         )
 
-                        if (!arabicOnlyMode) {
+                        if (!uiState.arabicOnlyMode) {
                             Text(
                                 text = verse.englishText,
                                 fontFamily = reading.englishFontFamily,
@@ -962,6 +1214,265 @@ private fun SurahReaderView(
                         }
                     }
                 }
+            }
+        }
+
+        // Docked Mini-Player Bar
+        if (uiState.playingSurah != null && uiState.playingAyah != null) {
+            RecitationMiniPlayer(
+                playingSurah = uiState.playingSurah,
+                playingAyah = uiState.playingAyah,
+                reciter = uiState.selectedReciter,
+                isPlaying = uiState.isPlayingAudio,
+                isBuffering = uiState.isBufferingAudio,
+                progressFraction = uiState.audioProgressFraction,
+                playbackSpeed = uiState.playbackSpeed,
+                autoAdvanceAyah = uiState.autoAdvanceAyah,
+                onPrevAyah = onPrevAyah,
+                onTogglePlayPause = onTogglePlayPauseSurah,
+                onNextAyah = onNextAyah,
+                onCycleSpeed = onCycleSpeed,
+                onToggleAutoAdvance = onToggleAutoAdvance,
+                onStop = onStopAudio
+            )
+        }
+    }
+}
+
+@Composable
+private fun RecitationMiniPlayer(
+    playingSurah: Int,
+    playingAyah: Int,
+    reciter: QuranReciterOption,
+    isPlaying: Boolean,
+    isBuffering: Boolean,
+    progressFraction: Float,
+    playbackSpeed: Float,
+    autoAdvanceAyah: Boolean,
+    onPrevAyah: () -> Unit,
+    onTogglePlayPause: () -> Unit,
+    onNextAyah: () -> Unit,
+    onCycleSpeed: () -> Unit,
+    onToggleAutoAdvance: () -> Unit,
+    onStop: () -> Unit
+) {
+    val surahName = SurahCatalog.byNumber(playingSurah).nameEnglish
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        tonalElevation = 8.dp,
+        shadowElevation = 8.dp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("recitation_mini_player")
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            if (isBuffering) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            } else {
+                LinearProgressIndicator(
+                    progress = { progressFraction.coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer
+                        ) {
+                            Text(
+                                text = reciter.language.badge,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                        Text(
+                            text = "$surahName $playingSurah:$playingAyah",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Text(
+                        text = reciter.displayName,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable(onClick = onCycleSpeed)
+                            .testTag("recitation_speed_button")
+                    ) {
+                        Text(
+                            text = "${playbackSpeed}x",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                        )
+                    }
+
+                    IconButton(
+                        onClick = onToggleAutoAdvance,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("recitation_auto_advance_toggle")
+                    ) {
+                        Icon(
+                            imageVector = if (autoAdvanceAyah) Icons.Filled.Repeat else Icons.Filled.RepeatOne,
+                            contentDescription = if (autoAdvanceAyah) "Auto-advance to next Ayah" else "Repeat single Ayah",
+                            tint = if (autoAdvanceAyah) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+
+                    IconButton(
+                        onClick = onPrevAyah,
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.SkipPrevious,
+                            contentDescription = "Previous Ayah",
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                            .clickable(onClick = onTogglePlayPause)
+                            .testTag("mini_player_play_pause")
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            if (isBuffering) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.onPrimary
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                                    contentDescription = if (isPlaying) "Pause" else "Play",
+                                    tint = MaterialTheme.colorScheme.onPrimary,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    IconButton(
+                        onClick = onNextAyah,
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.SkipNext,
+                            contentDescription = "Next Ayah",
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+
+                    IconButton(
+                        onClick = onStop,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("mini_player_stop")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Close,
+                            contentDescription = "Stop recitation",
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReciterDropdownButton(
+    selected: QuranReciterOption,
+    onSelect: (QuranReciterOption) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Box {
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.secondaryContainer,
+            modifier = Modifier
+                .clip(RoundedCornerShape(14.dp))
+                .clickable { expanded = true }
+                .testTag("quran_reciter_selector")
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.VolumeUp,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.size(16.dp)
+                )
+                Text(
+                    text = selected.shortLabel,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+            }
+        }
+
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            QuranReciterOption.entries.forEach { option ->
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(
+                                text = "${option.language.badge} · ${option.displayName}",
+                                fontWeight = if (option == selected) FontWeight.Bold else FontWeight.Normal
+                            )
+                            Text(
+                                text = option.subtitle,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    },
+                    onClick = {
+                        expanded = false
+                        onSelect(option)
+                    },
+                    modifier = Modifier.testTag("reciter_option_${option.id}")
+                )
             }
         }
     }

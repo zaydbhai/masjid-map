@@ -119,6 +119,13 @@ data class Masjid(
     val prayerSchedule: PrayerSchedule
 )
 
+data class MasjidRoadMetrics(
+    val distanceMeters: Int,
+    val durationSeconds: Int,
+    val travelMode: TravelMode,
+    val isExactRoadRoute: Boolean = true
+)
+
 enum class TravelMode(
     val id: String,
     val label: String,
@@ -192,6 +199,86 @@ enum class EnglishFontOption(
 }
 
 // ---- Quran Domain Models ----
+
+enum class RecitationLanguage(
+    val id: String,
+    val displayName: String,
+    val badge: String
+) {
+    ARABIC("ar", "Arabic", "AR"),
+    URDU("ur", "Urdu", "UR"),
+    ENGLISH("en", "English", "EN")
+}
+
+enum class QuranReciterOption(
+    val id: String,
+    val displayName: String,
+    val shortLabel: String,
+    val language: RecitationLanguage,
+    val subtitle: String,
+    val islamicNetworkEdition: String,
+    val preferredBitrate: Int,
+    val everyAyahFolder: String
+) {
+    MISHARY_ALAFASY(
+        id = "ar.alafasy",
+        displayName = "Mishary Rashid Alafasy",
+        shortLabel = "Alafasy (AR)",
+        language = RecitationLanguage.ARABIC,
+        subtitle = "Arabic · Melodic Hafs recitation",
+        islamicNetworkEdition = "ar.alafasy",
+        preferredBitrate = 128,
+        everyAyahFolder = "Alafasy_128kbps"
+    ),
+    AL_HUSARY(
+        id = "ar.husary",
+        displayName = "Mahmoud Khalil Al-Husary",
+        shortLabel = "Al-Husary (AR)",
+        language = RecitationLanguage.ARABIC,
+        subtitle = "Arabic · Clear paced Murattal for learning",
+        islamicNetworkEdition = "ar.husary",
+        preferredBitrate = 128,
+        everyAyahFolder = "Husary_128kbps"
+    ),
+    ABDUL_BASIT(
+        id = "ar.abdulbasitmurattal",
+        displayName = "Abdul Basit 'Abd us-Samad",
+        shortLabel = "Abdul Basit (AR)",
+        language = RecitationLanguage.ARABIC,
+        subtitle = "Arabic · Classic Murattal",
+        islamicNetworkEdition = "ar.abdulbasitmurattal",
+        preferredBitrate = 128,
+        everyAyahFolder = "Abdul_Basit_Murattal_128kbps"
+    ),
+    URDU_SHAMSHAD_KHAN(
+        id = "ur.khan",
+        displayName = "Shamshad Ali Khan",
+        shortLabel = "Urdu Audio",
+        language = RecitationLanguage.URDU,
+        subtitle = "Urdu · Verse-by-verse audio translation",
+        islamicNetworkEdition = "ur.khan",
+        preferredBitrate = 64,
+        everyAyahFolder = "translations/urdu_shamshad_ali_khan_46kbps"
+    ),
+    ENGLISH_IBRAHIM_WALK(
+        id = "en.walk",
+        displayName = "Ibrahim Walk (Sahih Int'l)",
+        shortLabel = "English Audio",
+        language = RecitationLanguage.ENGLISH,
+        subtitle = "English · Clear Sahih International narration",
+        islamicNetworkEdition = "en.walk",
+        preferredBitrate = 192,
+        everyAyahFolder = "English/Sahih_Intnl_Ibrahim_Walk_192kbps"
+    );
+
+    companion object {
+        fun fromId(id: String?): QuranReciterOption =
+            entries.firstOrNull { it.id == id } ?: MISHARY_ALAFASY
+
+        fun forLanguage(language: RecitationLanguage): List<QuranReciterOption> =
+            entries.filter { it.language == language }
+    }
+}
 
 enum class QuranTranslationOption(
     val editionId: String,
@@ -369,4 +456,83 @@ data class HadithSearchHit(
     val chapterId: String,
     val entry: HadithEntry
 )
+
+// ---- Home Screen Widget Customization Models ----
+
+enum class WidgetThemePreset(
+    val id: String,
+    val displayName: String
+) {
+    EMERALD("emerald", "Emerald & Gold"),
+    AMOLED("amoled", "AMOLED Black"),
+    GLASS_DARK("glass", "Translucent Dark"),
+    CLEAN_LIGHT("light", "Clean Light"),
+    WARM_SAND("sand", "Warm Parchment"),
+    DYNAMIC("dynamic", "System Colors");
+
+    companion object {
+        fun fromId(id: String?): WidgetThemePreset =
+            entries.firstOrNull { it.id == id } ?: EMERALD
+    }
+}
+
+enum class WidgetTileShape(
+    val id: String,
+    val displayName: String,
+    val outerRadiusDp: Int,
+    val innerRadiusDp: Int
+) {
+    PILL("pill", "Pill", 24, 16),
+    ROUNDED("rounded", "Soft Card", 18, 12),
+    SHARP("sharp", "Sharp", 8, 5);
+
+    companion object {
+        fun fromId(id: String?): WidgetTileShape =
+            entries.firstOrNull { it.id == id } ?: ROUNDED
+    }
+}
+
+enum class WidgetBottomMode(
+    val id: String,
+    val displayName: String
+) {
+    QUICK_TILES("tiles", "Quick Tiles"),
+    DAILY_HADITH("hadith", "Daily Hadith"),
+    BOTH("both", "Tiles + Hadith"),
+    COMPACT_ONLY("none", "Schedule Only");
+
+    companion object {
+        fun fromId(id: String?): WidgetBottomMode =
+            entries.firstOrNull { it.id == id } ?: QUICK_TILES
+    }
+}
+
+enum class WidgetQuickTile(
+    val id: String,
+    val label: String,
+    val shortBadge: String
+) {
+    QIBLA("qibla", "Qibla", "🧭"),
+    TASBEEH("tasbeeh", "Tasbeeh +1", "📿"),
+    QURAN("quran", "Qur'an", "📖"),
+    MASJIDS("masjids", "Masjids", "🕌"),
+    ADHKAR("adhkar", "Adhkar", "🤲"),
+    HADITH("hadith", "Hadith", "📜");
+
+    companion object {
+        val defaultSelection: List<WidgetQuickTile> = listOf(QIBLA, TASBEEH, QURAN, MASJIDS)
+
+        fun parseList(raw: String?): List<WidgetQuickTile> {
+            if (raw.isNullOrBlank()) return defaultSelection
+            val parsed = raw.split(",")
+                .mapNotNull { token -> entries.firstOrNull { it.id == token.trim() } }
+                .distinct()
+                .take(4)
+            return if (parsed.isEmpty()) defaultSelection else parsed
+        }
+
+        fun serializeList(tiles: List<WidgetQuickTile>): String =
+            tiles.distinct().take(4).joinToString(",") { it.id }
+    }
+}
 

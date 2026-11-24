@@ -10,6 +10,7 @@ import com.example.data.OsrmManeuver
 import com.example.data.OsrmResponse
 import com.example.data.OsrmRoute
 import com.example.data.OsrmStep
+import com.example.data.OsrmTableResponse
 import com.example.data.QuranRepository
 import com.example.domain.LatLngPoint
 import com.example.domain.Masjid
@@ -39,6 +40,15 @@ class OfflineStorageTest {
             geometries: String,
             steps: Boolean
         ): OsrmResponse {
+            throw IOException("Simulated offline device")
+        }
+
+        override suspend fun getTable(
+            profile: String,
+            coordinates: String,
+            sources: String,
+            annotations: String
+        ): OsrmTableResponse {
             throw IOException("Simulated offline device")
         }
     }
@@ -71,6 +81,19 @@ class OfflineStorageTest {
                         )
                     )
                 )
+            )
+        }
+
+        override suspend fun getTable(
+            profile: String,
+            coordinates: String,
+            sources: String,
+            annotations: String
+        ): OsrmTableResponse {
+            return OsrmTableResponse(
+                code = "Ok",
+                distances = listOf(listOf(0.0, 1250.0)),
+                durations = listOf(listOf(0.0, 900.0))
             )
         }
     }

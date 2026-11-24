@@ -74,11 +74,31 @@ object GeoFormatters {
         }
     }
 
-    fun estimateMinutes(distanceMeters: Double, mode: TravelMode): Int {
+    /**
+     * Approximates real street-network distance from straight-line Haversine distance
+     * when offline or waiting for OSRM table data (~1.32x urban road circuity).
+     */
+    fun estimateRoadMeters(straightLineMeters: Double): Double {
+        if (straightLineMeters <= 60.0) return straightLineMeters
+        return straightLineMeters * 1.32
+    }
+
+    fun estimateMinutes(roadOrAdjustedMeters: Double, mode: TravelMode): Int {
         val speedMetersPerMinute = when (mode) {
-            TravelMode.DRIVE -> 550.0 // ~33 km/h urban average
-            TravelMode.WALK -> 80.0   // ~4.8 km/h walking
+            TravelMode.DRIVE -> 470.0 // ~28 km/h realistic urban driving with turns/lights
+            TravelMode.WALK -> 78.0   // ~4.7 km/h walking
         }
-        return (distanceMeters / speedMetersPerMinute).roundToInt().coerceAtLeast(1)
+        return (roadOrAdjustedMeters / speedMetersPerMinute).roundToInt().coerceAtLeast(1)
+    }
+
+    fun fallbackRoadMetrics(straightLineMeters: Double, mode: TravelMode): MasjidRoadMetrics {
+        val approxRoadMeters = estimateRoadMeters(straightLineMeters).roundToInt()
+        val approxSeconds = estimateMinutes(approxRoadMeters.toDouble(), mode) * 60
+        return MasjidRoadMetrics(
+            distanceMeters = approxRoadMeters,
+            durationSeconds = approxSeconds,
+            travelMode = mode,
+            isExactRoadRoute = false
+        )
     }
 }

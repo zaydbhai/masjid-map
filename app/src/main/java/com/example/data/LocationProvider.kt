@@ -50,41 +50,53 @@ class LocationProvider(
     suspend fun getCurrentOrLastLocation(): LatLngPoint? {
         if (!hasLocationPermission()) return null
 
-        val fresh = getFreshLocation()
-        if (fresh != null) return fresh
+        // Try crisp GPS fix first (up to 4.5s), then balanced Wi-Fi/cell fix
+        val highAcc = kotlinx.coroutines.withTimeoutOrNull(4_500L) {
+            getFreshLocation(Priority.PRIORITY_HIGH_ACCURACY)
+        }
+        if (highAcc != null) return highAcc
+
+        val balanced = kotlinx.coroutines.withTimeoutOrNull(3_500L) {
+            getFreshLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY)
+        }
+        if (balanced != null) return balanced
 
         val lastFused = suspendCancellableCoroutine { cont ->
             fusedClient.lastLocation
                 .addOnSuccessListener { loc ->
                     if (cont.isActive) {
-                        cont.resume(loc?.let { LatLngPoint(it.latitude, it.longitude) })
+                        cont.resume(loc)
                     }
                 }
                 .addOnFailureListener {
                     if (cont.isActive) cont.resume(null)
                 }
         }
-        if (lastFused != null) return lastFused
 
-        // Fallback to framework LocationManager (GPS / Network / Passive) when offline indoors
-        return try {
+        // Compare lastFused vs framework LocationManager and prefer recent & accurate fix
+        val bestFramework = try {
             val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
             val gps = lm?.getLastKnownLocation(LocationManager.GPS_PROVIDER)
             val net = lm?.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
             val passive = lm?.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER)
-            val best = listOfNotNull(gps, net, passive).maxByOrNull { it.time }
-            best?.let { LatLngPoint(it.latitude, it.longitude) }
+            listOfNotNull(lastFused, gps, net, passive)
+                .sortedWith(
+                    compareByDescending<android.location.Location> { it.time }
+                        .thenBy { it.accuracy }
+                )
+                .firstOrNull()
         } catch (_: Exception) {
-            null
+            lastFused
         }
+        return bestFramework?.let { LatLngPoint(it.latitude, it.longitude) }
     }
 
     @SuppressLint("MissingPermission")
-    private suspend fun getFreshLocation(): LatLngPoint? = suspendCancellableCoroutine { cont ->
+    private suspend fun getFreshLocation(priority: Int): LatLngPoint? = suspendCancellableCoroutine { cont ->
         val tokenSource = CancellationTokenSource()
         cont.invokeOnCancellation { tokenSource.cancel() }
         try {
-            fusedClient.getCurrentLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY, tokenSource.token)
+            fusedClient.getCurrentLocation(priority, tokenSource.token)
                 .addOnSuccessListener { loc ->
                     if (cont.isActive) {
                         cont.resume(loc?.let { LatLngPoint(it.latitude, it.longitude) })

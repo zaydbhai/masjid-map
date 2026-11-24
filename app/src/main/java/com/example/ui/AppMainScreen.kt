@@ -37,18 +37,23 @@ import androidx.compose.ui.platform.testTag
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.domain.LatLngPoint
+import com.example.domain.PrayerTimeCalculator
 import com.example.ui.components.AdhkarTasbeehSheet
 import com.example.ui.components.HijriCalendarDialog
 import com.example.ui.components.OfflinePackSheet
 import com.example.ui.components.PrayerTimesSheet
 import com.example.ui.components.QiblaCompassSheet
 import com.example.ui.components.SettingsSheet
+import com.example.ui.components.WidgetCustomizerSheet
 
 @Composable
 fun AppMainScreen(
     masjidViewModel: MasjidMapViewModel = viewModel(),
     quranViewModel: QuranViewModel = viewModel(),
-    hadithViewModel: HadithViewModel = viewModel()
+    hadithViewModel: HadithViewModel = viewModel(),
+    pendingWidgetDest: String? = null,
+    onConsumeWidgetDest: () -> Unit = {}
 ) {
     val state by masjidViewModel.uiState.collectAsStateWithLifecycle()
     val quranState by quranViewModel.uiState.collectAsStateWithLifecycle()
@@ -103,6 +108,12 @@ fun AppMainScreen(
         masjidViewModel.clearError()
     }
 
+    LaunchedEffect(pendingWidgetDest) {
+        val dest = pendingWidgetDest ?: return@LaunchedEffect
+        masjidViewModel.handleWidgetDestination(dest, quranViewModel)
+        onConsumeWidgetDest()
+    }
+
     // Back closes active modal sheets or returns to Home from secondary top-level tabs
     BackHandler(
         enabled = state.showPrayerSheetFor != null ||
@@ -111,9 +122,11 @@ fun AppMainScreen(
             state.showQiblaSheet ||
             state.showAdhkarSheet ||
             state.showHijriDialog ||
+            state.showWidgetSheet ||
             state.currentTab != MainTab.HOME
     ) {
         when {
+            state.showWidgetSheet -> masjidViewModel.closeWidgetSheet()
             state.showHijriDialog -> masjidViewModel.closeHijriDialog()
             state.showQiblaSheet -> masjidViewModel.closeQiblaSheet()
             state.showAdhkarSheet -> masjidViewModel.closeAdhkarSheet()
@@ -161,6 +174,7 @@ fun AppMainScreen(
                     onRequestLocation = requestLocationPermission,
                     onOpenOfflineSheet = masjidViewModel::openOfflineSheet,
                     onOpenSettings = masjidViewModel::openSettingsSheet,
+                    onOpenWidgetCustomizer = masjidViewModel::openWidgetSheet,
                     onOpenQibla = masjidViewModel::openQiblaSheet,
                     onOpenAdhkar = masjidViewModel::openAdhkarSheet,
                     onOpenHijriDialog = masjidViewModel::openHijriDialog,
@@ -249,6 +263,7 @@ fun AppMainScreen(
             onSelectLeadMinutes = masjidViewModel::setReminderLeadMinutes,
             onSelectAlertSound = masjidViewModel::setAlertSound,
             onSendTestNotification = masjidViewModel::sendTestNotification,
+            onOpenWidgetCustomizer = masjidViewModel::openWidgetSheet,
             onDismiss = masjidViewModel::closeSettingsSheet
         )
     }
@@ -314,6 +329,46 @@ fun AppMainScreen(
     // Offline Hijri Date & Upcoming Islamic Dates Dialog
     if (state.showHijriDialog) {
         HijriCalendarDialog(onDismiss = masjidViewModel::closeHijriDialog)
+    }
+
+    // Customizable Home Widget Sheet
+    if (state.showWidgetSheet) {
+        val refPoint = state.userLocation ?: state.mapCenter ?: LatLngPoint(21.4225, 39.8262)
+        val qiblaDeg = PrayerTimeCalculator.qiblaBearingDegrees(refPoint)
+        WidgetCustomizerSheet(
+            widgetTheme = state.widgetTheme,
+            widgetTileShape = state.widgetTileShape,
+            widgetOpacityPercent = state.widgetOpacityPercent,
+            widgetShowSunrise = state.widgetShowSunrise,
+            widgetShowHijri = state.widgetShowHijri,
+            widgetShowLocation = state.widgetShowLocation,
+            widgetShowProgress = state.widgetShowProgress,
+            widgetUse24Hour = state.widgetUse24Hour,
+            widgetBottomMode = state.widgetBottomMode,
+            widgetQuickTiles = state.widgetQuickTiles,
+            widgetCustomTitle = state.widgetCustomTitle,
+            schedule = state.homePrayerSchedule,
+            locationLabel = state.homeLocationLabel,
+            qiblaDeg = qiblaDeg,
+            qiblaCardinal = PrayerTimeCalculator.compassCardinal(qiblaDeg),
+            tasbeehCount = state.tasbeehCount,
+            tasbeehTarget = state.tasbeehTarget,
+            lastReadSurah = state.lastReadSurah,
+            lastReadAyah = state.lastReadAyah,
+            dailyHadith = state.hadithOfTheDay,
+            onSelectTheme = masjidViewModel::setWidgetTheme,
+            onSelectShape = masjidViewModel::setWidgetTileShape,
+            onSelectOpacity = masjidViewModel::setWidgetOpacityPercent,
+            onToggleSunrise = masjidViewModel::setWidgetShowSunrise,
+            onToggleHijri = masjidViewModel::setWidgetShowHijri,
+            onToggleLocation = masjidViewModel::setWidgetShowLocation,
+            onToggleProgress = masjidViewModel::setWidgetShowProgress,
+            onToggle24Hour = masjidViewModel::setWidgetUse24Hour,
+            onSelectBottomMode = masjidViewModel::setWidgetBottomMode,
+            onToggleQuickTile = masjidViewModel::toggleWidgetQuickTile,
+            onChangeCustomTitle = masjidViewModel::setWidgetCustomTitle,
+            onDismiss = masjidViewModel::closeWidgetSheet
+        )
     }
 }
 

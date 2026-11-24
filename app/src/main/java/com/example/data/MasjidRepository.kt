@@ -209,24 +209,78 @@ class MasjidRepository(
         }
 
         val straightMeters = PrayerTimeCalculator.distanceMeters(origin, destination.location)
-        val estimatedMins = GeoFormatters.estimateMinutes(straightMeters, travelMode)
+        val fallbackMetrics = GeoFormatters.fallbackRoadMetrics(straightMeters, travelMode)
         val bearing = computeBearing(origin, destination.location)
         val cardinal = PrayerTimeCalculator.compassCardinal(bearing)
         RouteInfo(
             masjidId = destination.id,
             travelMode = travelMode,
-            distanceMeters = straightMeters.roundToInt(),
-            durationSeconds = estimatedMins * 60,
+            distanceMeters = fallbackMetrics.distanceMeters,
+            durationSeconds = fallbackMetrics.durationSeconds,
             polylinePoints = listOf(origin, destination.location),
             steps = listOf(
                 RouteStep(
                     instruction = "Offline direct bearing: Head $cardinal (${bearing.roundToInt()}°) toward ${destination.name}",
-                    distanceText = GeoFormatters.formatDistance(straightMeters)
+                    distanceText = GeoFormatters.formatDistance(fallbackMetrics.distanceMeters.toDouble())
                 )
             ),
             source = RouteSource.DIRECT_ESTIMATE
         )
     }
+
+    /**
+     * Fetches real OSRM road distances & durations in a single lightweight HTTP call
+     * so masjid cards/list match the numbers shown after clicking Route.
+     */
+    suspend fun fetchRoadMetricsBatch(
+        origin: LatLngPoint,
+        masjids: List<Masjid>,
+        travelMode: TravelMode,
+        maxTargets: Int = 25
+    ): Map<String, com.example.domain.MasjidRoadMetrics> = withContext(Dispatchers.IO) {
+        val targets = masjids.take(maxTargets)
+        if (targets.isEmpty()) return@withContext emptyMap()
+
+        val coords = buildString {
+            append("${origin.longitude},${origin.latitude}")
+            targets.forEach { m ->
+                append(";${m.location.longitude},${m.location.latitude}")
+            }
+        }
+        return@withContext try {
+            val table = osrmApi.getTable(profile = travelMode.osrmProfile, coordinates = coords)
+            val distRow = table.distances.firstOrNull().orEmpty()
+            val durRow = table.durations.firstOrNull().orEmpty()
+            val out = LinkedHashMap<String, com.example.domain.MasjidRoadMetrics>(targets.size)
+            targets.forEachIndexed { idx, masjid ->
+                val col = idx + 1
+                val dMeters = distRow.getOrNull(col)
+                val durSecs = durRow.getOrNull(col)
+                if (dMeters != null && durSecs != null && dMeters >= 0.0 && durSecs >= 0.0) {
+                    out[masjid.id] = com.example.domain.MasjidRoadMetrics(
+                        distanceMeters = dMeters.roundToInt().coerceAtLeast(1),
+                        durationSeconds = durSecs.roundToInt().coerceAtLeast(60),
+                        travelMode = travelMode,
+                        isExactRoadRoute = true
+                    )
+                }
+            }
+            out
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+
+    fun recalculateDistances(
+        masjids: List<Masjid>,
+        referenceForDistance: LatLngPoint
+    ): List<Masjid> = masjids
+        .map { masjid ->
+            masjid.copy(
+                distanceMeters = PrayerTimeCalculator.distanceMeters(referenceForDistance, masjid.location)
+            )
+        }
+        .sortedBy { it.distanceMeters }
 
     suspend fun cacheNearbyMasjidsAndRoutesOffline(
         center: LatLngPoint,
@@ -284,53 +338,34 @@ class MasjidRepository(
         madhab: AsrMadhab,
         radiusMeters: Int
     ): List<Masjid> {
-        val query = """
-            [out:json][timeout:18];
-            (
-              node["amenity"="place_of_worship"]["religion"="muslim"](around:$radiusMeters,${center.latitude},${center.longitude});
-              way["amenity"="place_of_worship"]["religion"="muslim"](around:$radiusMeters,${center.latitude},${center.longitude});
-              relation["amenity"="place_of_worship"]["religion"="muslim"](around:$radiusMeters,${center.latitude},${center.longitude});
-            );
-            out center 30;
-        """.trimIndent()
+        val mainQuery = buildOverpassQuery(center, radiusMeters, limit = 400)
+        val mainResponse = queryOverpassWithFallback(mainQuery)
 
-        val response = try {
+        // In dense cities (e.g., 400+ masjids in 10 km), Overpass returns in OSM ID order,
+        // so also fetch an inner 2.5 km neighborhood ring to guarantee closest walking masjids appear.
+        val combinedElements = if (mainResponse.elements.size >= 360 && radiusMeters > 2_500) {
+            val innerQuery = buildOverpassQuery(center, radiusMeters = 2_500, limit = 200)
+            val innerElements = runCatching { queryOverpassWithFallback(innerQuery).elements }.getOrDefault(emptyList())
+            mainResponse.elements + innerElements
+        } else {
+            mainResponse.elements
+        }
+
+        return parseAndDeduplicateOverpassElements(
+            elements = combinedElements,
+            referenceForDistance = referenceForDistance,
+            nowMillis = nowMillis,
+            method = method,
+            madhab = madhab
+        )
+    }
+
+    private suspend fun queryOverpassWithFallback(query: String): OverpassResponse {
+        return try {
             overpassPrimary.queryMasjids(query)
         } catch (_: Exception) {
             overpassMirror.queryMasjids(query)
         }
-
-        return response.elements.mapNotNull { el ->
-            val lat = el.lat ?: el.center?.lat ?: return@mapNotNull null
-            val lon = el.lon ?: el.center?.lon ?: return@mapNotNull null
-            val tags = el.tags.orEmpty()
-            val name = tags["name"] ?: tags["name:en"] ?: tags["alt_name"] ?: "Nearby Masjid"
-            val street = listOfNotNull(
-                tags["addr:housenumber"],
-                tags["addr:street"]
-            ).joinToString(" ").trim()
-            val city = listOfNotNull(tags["addr:city"], tags["addr:state"]).joinToString(", ").trim()
-            val address = listOf(street, city).filter { it.isNotBlank() }.joinToString(", ")
-                .ifBlank { String.format(Locale.US, "%.4f, %.4f", lat, lon) }
-            val point = LatLngPoint(lat, lon)
-            val dist = PrayerTimeCalculator.distanceMeters(referenceForDistance, point)
-            Masjid(
-                id = "${el.type ?: "node"}_${el.id}",
-                name = name,
-                address = address,
-                location = point,
-                distanceMeters = dist,
-                source = MasjidSource.OPEN_STREET_MAP,
-                qiblaBearingDegrees = PrayerTimeCalculator.qiblaBearingDegrees(point),
-                prayerSchedule = PrayerTimeCalculator.calculateSchedule(
-                    latitude = lat,
-                    longitude = lon,
-                    nowMillis = nowMillis,
-                    method = method,
-                    madhab = madhab
-                )
-            )
-        }.sortedBy { it.distanceMeters }
     }
 
     private fun saveMasjidsToOfflineStore(newMasjids: List<Masjid>) {
@@ -338,20 +373,7 @@ class MasjidRepository(
         if (newMasjids.isEmpty()) return
         runCatching {
             val map = LinkedHashMap<String, SavedMasjidRecord>()
-            if (file.exists()) {
-                val arr = JSONArray(file.readText())
-                for (i in 0 until arr.length()) {
-                    val obj = arr.getJSONObject(i)
-                    val id = obj.getString("id")
-                    map[id] = SavedMasjidRecord(
-                        id = id,
-                        name = obj.getString("name"),
-                        address = obj.getString("address"),
-                        lat = obj.getDouble("lat"),
-                        lng = obj.getDouble("lng")
-                    )
-                }
-            }
+            // Insert freshly fetched nearby masjids FIRST so they are never evicted by older distant entries
             newMasjids.forEach { m ->
                 map[m.id] = SavedMasjidRecord(
                     id = m.id,
@@ -361,8 +383,24 @@ class MasjidRepository(
                     lng = m.location.longitude
                 )
             }
+            if (file.exists()) {
+                val arr = JSONArray(file.readText())
+                for (i in 0 until arr.length()) {
+                    val obj = arr.getJSONObject(i)
+                    val id = obj.getString("id")
+                    if (!map.containsKey(id)) {
+                        map[id] = SavedMasjidRecord(
+                            id = id,
+                            name = obj.getString("name"),
+                            address = obj.getString("address"),
+                            lat = obj.getDouble("lat"),
+                            lng = obj.getDouble("lng")
+                        )
+                    }
+                }
+            }
             val outArr = JSONArray()
-            map.values.take(300).forEach { rec ->
+            map.values.take(400).forEach { rec ->
                 outArr.put(
                     JSONObject().apply {
                         put("id", rec.id)
@@ -529,5 +567,104 @@ class MasjidRepository(
         val x = kotlin.math.cos(lat1) * kotlin.math.sin(lat2) -
             kotlin.math.sin(lat1) * kotlin.math.cos(lat2) * kotlin.math.cos(dLng)
         return (Math.toDegrees(kotlin.math.atan2(y, x)) + 360.0) % 360.0
+    }
+
+    companion object {
+        fun buildOverpassQuery(
+            center: LatLngPoint,
+            radiusMeters: Int,
+            limit: Int = 400
+        ): String {
+            val lat = String.format(Locale.US, "%.6f", center.latitude)
+            val lng = String.format(Locale.US, "%.6f", center.longitude)
+            return """
+                [out:json][timeout:25];
+                (
+                  nwr["amenity"="place_of_worship"]["religion"="muslim"](around:$radiusMeters,$lat,$lng);
+                  nwr["building"="mosque"](around:$radiusMeters,$lat,$lng);
+                  nwr["amenity"="place_of_worship"]["name"~"Masjid|Mosque|Jamia|Jama|Musalla|Eidgah|Markaz",i](around:$radiusMeters,$lat,$lng);
+                );
+                out center $limit;
+            """.trimIndent()
+        }
+
+        fun parseAndDeduplicateOverpassElements(
+            elements: List<OverpassElement>,
+            referenceForDistance: LatLngPoint,
+            nowMillis: Long,
+            method: CalculationMethod,
+            madhab: AsrMadhab
+        ): List<Masjid> {
+            val byId = LinkedHashMap<String, Masjid>()
+            for (el in elements) {
+                val lat = el.lat ?: el.center?.lat ?: continue
+                val lon = el.lon ?: el.center?.lon ?: continue
+                val tags = el.tags.orEmpty()
+                val rawName = tags["name"] ?: tags["name:en"] ?: tags["alt_name"] ?: tags["official_name"]
+                val name = rawName?.trim()?.takeIf { it.isNotBlank() } ?: "Nearby Masjid"
+                val street = listOfNotNull(
+                    tags["addr:housenumber"],
+                    tags["addr:street"]
+                ).joinToString(" ").trim()
+                val city = listOfNotNull(
+                    tags["addr:suburb"],
+                    tags["addr:city"],
+                    tags["addr:state"]
+                ).joinToString(", ").trim()
+                val address = listOf(street, city).filter { it.isNotBlank() }.joinToString(", ")
+                    .ifBlank { String.format(Locale.US, "%.4f, %.4f", lat, lon) }
+                val point = LatLngPoint(lat, lon)
+                val id = "${el.type ?: "node"}_${el.id}"
+                val candidate = Masjid(
+                    id = id,
+                    name = name,
+                    address = address,
+                    location = point,
+                    distanceMeters = PrayerTimeCalculator.distanceMeters(referenceForDistance, point),
+                    source = MasjidSource.OPEN_STREET_MAP,
+                    qiblaBearingDegrees = PrayerTimeCalculator.qiblaBearingDegrees(point),
+                    prayerSchedule = PrayerTimeCalculator.calculateSchedule(
+                        latitude = lat,
+                        longitude = lon,
+                        nowMillis = nowMillis,
+                        method = method,
+                        madhab = madhab
+                    )
+                )
+                val existing = byId[id]
+                if (existing == null || (existing.name == "Nearby Masjid" && candidate.name != "Nearby Masjid")) {
+                    byId[id] = candidate
+                }
+            }
+
+            // Deduplicate overlapping way-building + node-POI pairs for the same physical mosque (within 30m)
+            val sorted = byId.values.sortedBy { it.distanceMeters }
+            val deduped = ArrayList<Masjid>(sorted.size)
+            for (candidate in sorted) {
+                val candidateNorm = candidate.name.lowercase(Locale.US).replace(Regex("[^a-z0-9]"), "")
+                val dupIndex = deduped.indexOfFirst { existing ->
+                    val sep = PrayerTimeCalculator.distanceMeters(existing.location, candidate.location)
+                    if (sep > 30.0) {
+                        false
+                    } else {
+                        val existingNorm = existing.name.lowercase(Locale.US).replace(Regex("[^a-z0-9]"), "")
+                        existing.name == "Nearby Masjid" ||
+                            candidate.name == "Nearby Masjid" ||
+                            existingNorm == candidateNorm ||
+                            existingNorm.contains(candidateNorm) ||
+                            candidateNorm.contains(existingNorm)
+                    }
+                }
+                if (dupIndex == -1) {
+                    deduped.add(candidate)
+                } else {
+                    val existing = deduped[dupIndex]
+                    if (existing.name == "Nearby Masjid" && candidate.name != "Nearby Masjid") {
+                        deduped[dupIndex] = candidate
+                    }
+                }
+            }
+            return deduped.sortedBy { it.distanceMeters }
+        }
     }
 }

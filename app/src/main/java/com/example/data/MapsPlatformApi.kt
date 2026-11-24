@@ -1,7 +1,8 @@
 package com.example.data
 
 import com.squareup.moshi.Json
-import com.squareup.moshi.JsonClass
+import com.squareup.moshi.Moshi
+import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
@@ -17,13 +18,11 @@ import java.util.concurrent.TimeUnit
 
 // ---- OpenStreetMap Overpass API (100% Free, Zero API Key) ----
 
-@JsonClass(generateAdapter = true)
 data class OverpassCenter(
     val lat: Double,
     val lon: Double
 )
 
-@JsonClass(generateAdapter = true)
 data class OverpassElement(
     val type: String? = null,
     val id: Long = 0L,
@@ -33,7 +32,6 @@ data class OverpassElement(
     val tags: Map<String, String>? = null
 )
 
-@JsonClass(generateAdapter = true)
 data class OverpassResponse(
     val elements: List<OverpassElement> = emptyList()
 )
@@ -48,7 +46,6 @@ interface OverpassApi {
 
 // ---- OpenStreetMap Nominatim Geocoding (100% Free, Zero API Key) ----
 
-@JsonClass(generateAdapter = true)
 data class NominatimResult(
     @Json(name = "lat") val lat: String,
     @Json(name = "lon") val lon: String,
@@ -67,25 +64,21 @@ interface NominatimApi {
 
 // ---- OSRM Routing API (100% Free, Zero API Key) ----
 
-@JsonClass(generateAdapter = true)
 data class OsrmManeuver(
     val type: String? = null,
     val modifier: String? = null
 )
 
-@JsonClass(generateAdapter = true)
 data class OsrmStep(
     val name: String? = null,
     val distance: Double? = null,
     val maneuver: OsrmManeuver? = null
 )
 
-@JsonClass(generateAdapter = true)
 data class OsrmLeg(
     val steps: List<OsrmStep> = emptyList()
 )
 
-@JsonClass(generateAdapter = true)
 data class OsrmRoute(
     val distance: Double = 0.0,
     val duration: Double = 0.0,
@@ -93,10 +86,15 @@ data class OsrmRoute(
     val legs: List<OsrmLeg> = emptyList()
 )
 
-@JsonClass(generateAdapter = true)
 data class OsrmResponse(
     val code: String? = null,
     val routes: List<OsrmRoute> = emptyList()
+)
+
+data class OsrmTableResponse(
+    val code: String? = null,
+    val distances: List<List<Double?>> = emptyList(),
+    val durations: List<List<Double?>> = emptyList()
 )
 
 interface OsrmApi {
@@ -108,9 +106,27 @@ interface OsrmApi {
         @Query("geometries") geometries: String = "polyline",
         @Query("steps") steps: Boolean = true
     ): OsrmResponse
+
+    @GET("table/v1/{profile}/{coordinates}")
+    suspend fun getTable(
+        @Path("profile") profile: String,
+        @Path("coordinates") coordinates: String,
+        @Query("sources") sources: String = "0",
+        @Query("annotations") annotations: String = "distance,duration"
+    ): OsrmTableResponse
 }
 
 object NetworkClients {
+    val moshi: Moshi by lazy {
+        Moshi.Builder()
+            .addLast(KotlinJsonAdapterFactory())
+            .build()
+    }
+
+    private val moshiConverterFactory: MoshiConverterFactory by lazy {
+        MoshiConverterFactory.create(moshi)
+    }
+
     val okHttpClient: OkHttpClient by lazy {
         val logging = HttpLoggingInterceptor().apply {
             level = HttpLoggingInterceptor.Level.BASIC
@@ -126,7 +142,7 @@ object NetworkClients {
         Retrofit.Builder()
             .baseUrl("https://overpass-api.de/")
             .client(okHttpClient)
-            .addConverterFactory(MoshiConverterFactory.create())
+            .addConverterFactory(moshiConverterFactory)
             .build()
             .create(OverpassApi::class.java)
     }
@@ -135,7 +151,7 @@ object NetworkClients {
         Retrofit.Builder()
             .baseUrl("https://overpass.kumi.systems/")
             .client(okHttpClient)
-            .addConverterFactory(MoshiConverterFactory.create())
+            .addConverterFactory(moshiConverterFactory)
             .build()
             .create(OverpassApi::class.java)
     }
@@ -144,7 +160,7 @@ object NetworkClients {
         Retrofit.Builder()
             .baseUrl("https://nominatim.openstreetmap.org/")
             .client(okHttpClient)
-            .addConverterFactory(MoshiConverterFactory.create())
+            .addConverterFactory(moshiConverterFactory)
             .build()
             .create(NominatimApi::class.java)
     }
@@ -153,7 +169,7 @@ object NetworkClients {
         Retrofit.Builder()
             .baseUrl("https://router.project-osrm.org/")
             .client(okHttpClient)
-            .addConverterFactory(MoshiConverterFactory.create())
+            .addConverterFactory(moshiConverterFactory)
             .build()
             .create(OsrmApi::class.java)
     }

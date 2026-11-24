@@ -100,6 +100,8 @@ fun MasjidOpenStreetMap(
     userLocation: LatLngPoint?,
     mapCenter: LatLngPoint?,
     masjids: List<Masjid>,
+    roadMetricsById: Map<String, com.example.domain.MasjidRoadMetrics>,
+    travelMode: TravelMode,
     selectedMasjid: Masjid?,
     activeRoute: RouteInfo?,
     recenterTick: Int,
@@ -210,13 +212,15 @@ fun MasjidOpenStreetMap(
                 val nextLabel = masjid.prayerSchedule.nextPrayer?.let {
                     "${it.name.displayName} ${it.formattedTime}"
                 } ?: "Tap for prayer times"
+                val metrics = roadMetricsById[masjid.id]?.takeIf { it.travelMode == travelMode }
+                    ?: GeoFormatters.fallbackRoadMetrics(masjid.distanceMeters, travelMode)
 
                 val marker = Marker(view).apply {
                     position = GeoPoint(masjid.location.latitude, masjid.location.longitude)
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                     icon = if (isSelected) selectedIcon else defaultIcon
                     title = masjid.name
-                    snippet = "${GeoFormatters.formatDistance(masjid.distanceMeters)} · $nextLabel"
+                    snippet = "${GeoFormatters.formatDistance(metrics.distanceMeters.toDouble())} · $nextLabel"
                     setOnMarkerClickListener { _, _ ->
                         currentOnSelect(masjid)
                         true
@@ -308,6 +312,7 @@ private fun createUserDotDrawable(context: Context, fillColor: Int): Drawable {
 @Composable
 fun SelectedMasjidCard(
     masjid: Masjid,
+    roadMetrics: com.example.domain.MasjidRoadMetrics?,
     travelMode: TravelMode,
     isFavorite: Boolean,
     isLoadingRoute: Boolean,
@@ -318,7 +323,9 @@ fun SelectedMasjidCard(
     modifier: Modifier = Modifier
 ) {
     val schedule = masjid.prayerSchedule
-    val estimatedMins = GeoFormatters.estimateMinutes(masjid.distanceMeters, travelMode)
+    val effectiveMetrics = roadMetrics?.takeIf { it.travelMode == travelMode }
+        ?: GeoFormatters.fallbackRoadMetrics(masjid.distanceMeters, travelMode)
+    val estimatedMins = (effectiveMetrics.durationSeconds / 60.0).let { kotlin.math.round(it).toInt().coerceAtLeast(1) }
     val arriveBeforeNext = schedule.nextPrayer != null && estimatedMins < schedule.minutesUntilNext
 
     ElevatedCard(
@@ -371,7 +378,7 @@ fun SelectedMasjidCard(
                     color = MaterialTheme.colorScheme.primaryContainer
                 ) {
                     Text(
-                        text = GeoFormatters.formatDistance(masjid.distanceMeters),
+                        text = GeoFormatters.formatDistance(effectiveMetrics.distanceMeters.toDouble()),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onPrimaryContainer,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
@@ -407,8 +414,13 @@ fun SelectedMasjidCard(
                                 style = MaterialTheme.typography.labelLarge,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
+                            val etaText = if (effectiveMetrics.isExactRoadRoute) {
+                                "${GeoFormatters.formatDuration(effectiveMetrics.durationSeconds)} ${travelMode.label.lowercase()}"
+                            } else {
+                                "~$estimatedMins min ${travelMode.label.lowercase()}"
+                            }
                             Text(
-                                text = "${GeoFormatters.formatCountdown(schedule.minutesUntilNext)} · ~$estimatedMins min ${travelMode.label.lowercase()}",
+                                text = "${GeoFormatters.formatCountdown(schedule.minutesUntilNext)} · $etaText",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = if (arriveBeforeNext) {
                                     MaterialTheme.colorScheme.primary
@@ -720,6 +732,7 @@ fun ActiveRouteCard(
 @Composable
 fun MasjidListView(
     masjids: List<Masjid>,
+    roadMetricsById: Map<String, com.example.domain.MasjidRoadMetrics>,
     selectedMasjid: Masjid?,
     favoriteMasjidIds: Set<String>,
     travelMode: TravelMode,
@@ -793,7 +806,13 @@ fun MasjidListView(
         items(masjids, key = { it.id }) { masjid ->
             val isSelected = selectedMasjid?.id == masjid.id
             val next = masjid.prayerSchedule.nextPrayer
-            val etaMins = GeoFormatters.estimateMinutes(masjid.distanceMeters, travelMode)
+            val metrics = roadMetricsById[masjid.id]?.takeIf { it.travelMode == travelMode }
+                ?: GeoFormatters.fallbackRoadMetrics(masjid.distanceMeters, travelMode)
+            val etaText = if (metrics.isExactRoadRoute) {
+                GeoFormatters.formatDuration(metrics.durationSeconds)
+            } else {
+                "~${GeoFormatters.formatDuration(metrics.durationSeconds)}"
+            }
 
             ElevatedCard(
                 shape = RoundedCornerShape(20.dp),
@@ -868,7 +887,7 @@ fun MasjidListView(
                             color = MaterialTheme.colorScheme.primaryContainer
                         ) {
                             Text(
-                                text = GeoFormatters.formatDistance(masjid.distanceMeters),
+                                text = GeoFormatters.formatDistance(metrics.distanceMeters.toDouble()),
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onPrimaryContainer,
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
@@ -893,7 +912,7 @@ fun MasjidListView(
                                     color = MaterialTheme.colorScheme.primary
                                 )
                                 Text(
-                                    text = "${GeoFormatters.formatCountdown(masjid.prayerSchedule.minutesUntilNext)} · ~$etaMins min",
+                                    text = "${GeoFormatters.formatCountdown(masjid.prayerSchedule.minutesUntilNext)} · $etaText",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )

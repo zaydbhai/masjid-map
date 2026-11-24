@@ -113,11 +113,23 @@ class QuranRepository(private val context: Context) {
 
     fun getCachedCountBoth(editionId: String): Int = getCachedSurahNumbers(editionId).size
 
-    fun getCacheSizeBytes(): Long =
-        cacheDir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+    private val audioCacheDir: File by lazy {
+        File(context.filesDir, "quran_audio_cache")
+    }
+
+    fun getCacheSizeBytes(): Long {
+        val textBytes = cacheDir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+        val audioBytes = if (audioCacheDir.exists()) {
+            audioCacheDir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+        } else {
+            0L
+        }
+        return textBytes + audioBytes
+    }
 
     fun clearCache() {
         runCatching { cacheDir.deleteRecursively() }
+        runCatching { audioCacheDir.deleteRecursively() }
     }
 
     private fun downloadAndSplitEdition(

@@ -127,4 +127,44 @@ class NewFeaturesTest {
         assertTrue(repo.hadithBookmarks.value.any { it.id == "test_h_1" })
         assertFalse(repo.toggleHadithBookmark(hadith))
     }
+
+    @Test
+    fun `widget customization models and progress calculation behave properly`() {
+        val serialized = com.example.domain.WidgetQuickTile.serializeList(
+            listOf(
+                com.example.domain.WidgetQuickTile.QIBLA,
+                com.example.domain.WidgetQuickTile.TASBEEH,
+                com.example.domain.WidgetQuickTile.QURAN,
+                com.example.domain.WidgetQuickTile.MASJIDS
+            )
+        )
+        val parsed = com.example.domain.WidgetQuickTile.parseList(serialized)
+        assertEquals(4, parsed.size)
+        assertEquals(com.example.domain.WidgetQuickTile.QIBLA, parsed.first())
+        assertEquals(com.example.domain.WidgetThemePreset.AMOLED, com.example.domain.WidgetThemePreset.fromId("amoled"))
+        assertEquals(com.example.domain.WidgetTileShape.PILL, com.example.domain.WidgetTileShape.fromId("pill"))
+
+        val schedule = PrayerTimeCalculator.calculateSchedule(21.4225, 39.8262)
+        val percent = com.example.widget.computePrayerProgressPercent(schedule, System.currentTimeMillis())
+        assertTrue(percent in 5..98)
+    }
+
+    @Test
+    fun `moshi runtime adapter deserializes overpass nominatim and osrm json cleanly`() {
+        val moshi = com.example.data.NetworkClients.moshi
+        val overpass = moshi.adapter(com.example.data.OverpassResponse::class.java)
+            .fromJson("""{"elements":[{"type":"node","id":42,"lat":24.86,"lon":67.01,"tags":{"name":"Masjid Al-Noor"}}]}""")
+        assertEquals(1, overpass?.elements?.size)
+        assertEquals("Masjid Al-Noor", overpass?.elements?.first()?.tags?.get("name"))
+
+        val nominatim = moshi.adapter(com.example.data.NominatimResult::class.java)
+            .fromJson("""{"lat":"24.8607","lon":"67.0011","display_name":"Karachi, Pakistan"}""")
+        assertEquals("24.8607", nominatim?.lat)
+        assertEquals("Karachi, Pakistan", nominatim?.displayName)
+
+        val osrm = moshi.adapter(com.example.data.OsrmResponse::class.java)
+            .fromJson("""{"code":"Ok","routes":[{"distance":500.0,"duration":120.0,"geometry":"abc"}]}""")
+        assertEquals("Ok", osrm?.code)
+        assertEquals(500.0, osrm?.routes?.first()?.distance ?: 0.0, 0.01)
+    }
 }

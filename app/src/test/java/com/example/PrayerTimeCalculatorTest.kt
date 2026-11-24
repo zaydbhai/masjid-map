@@ -109,4 +109,124 @@ class PrayerTimeCalculatorTest {
         assertEquals(21, books.map { it.id }.distinct().size)
         assertTrue(HadithCatalog.authenticDailySeeds.isNotEmpty())
     }
+
+    @Test
+    fun widgetCustomizationModelsAndProgressCalculationWork() {
+        val serialized = com.example.domain.WidgetQuickTile.serializeList(
+            listOf(
+                com.example.domain.WidgetQuickTile.QIBLA,
+                com.example.domain.WidgetQuickTile.TASBEEH,
+                com.example.domain.WidgetQuickTile.QURAN,
+                com.example.domain.WidgetQuickTile.MASJIDS
+            )
+        )
+        val parsed = com.example.domain.WidgetQuickTile.parseList(serialized)
+        assertEquals(4, parsed.size)
+        assertEquals(com.example.domain.WidgetQuickTile.QIBLA, parsed.first())
+        assertEquals(com.example.domain.WidgetThemePreset.AMOLED, com.example.domain.WidgetThemePreset.fromId("amoled"))
+        assertEquals(com.example.domain.WidgetTileShape.PILL, com.example.domain.WidgetTileShape.fromId("pill"))
+
+        val schedule = PrayerTimeCalculator.calculateSchedule(21.4225, 39.8262)
+        val percent = com.example.widget.computePrayerProgressPercent(schedule, System.currentTimeMillis())
+        assertTrue(percent in 5..98)
+    }
+
+    @Test
+    fun moshiRuntimeAdapterDeserializesOsmAndOsrmResponsesWithoutKsp() {
+        val moshi = com.example.data.NetworkClients.moshi
+        val overpass = moshi.adapter(com.example.data.OverpassResponse::class.java)
+            .fromJson("""{"elements":[{"type":"node","id":42,"lat":24.86,"lon":67.01,"tags":{"name":"Masjid Al-Noor"}}]}""")
+        assertEquals(1, overpass?.elements?.size)
+        assertEquals("Masjid Al-Noor", overpass?.elements?.first()?.tags?.get("name"))
+
+        val nominatim = moshi.adapter(com.example.data.NominatimResult::class.java)
+            .fromJson("""{"lat":"24.8607","lon":"67.0011","display_name":"Karachi, Pakistan"}""")
+        assertEquals("24.8607", nominatim?.lat)
+        assertEquals("Karachi, Pakistan", nominatim?.displayName)
+
+        val osrm = moshi.adapter(com.example.data.OsrmResponse::class.java)
+            .fromJson("""{"code":"Ok","routes":[{"distance":500.0,"duration":120.0,"geometry":"abc"}]}""")
+        assertEquals("Ok", osrm?.code)
+        assertEquals(500.0, osrm?.routes?.first()?.distance ?: 0.0, 0.01)
+
+        val table = moshi.adapter(com.example.data.OsrmTableResponse::class.java)
+            .fromJson("""{"code":"Ok","distances":[[0.0,420.5,1480.0]],"durations":[[0.0,55.0,190.0]]}""")
+        assertEquals("Ok", table?.code)
+        assertEquals(420.5, table?.distances?.firstOrNull()?.get(1) ?: 0.0, 0.01)
+    }
+
+    @Test
+    fun overpassDiscoveryIncludesBuildingMosqueAndDeduplicatesWayAndNodePairs() {
+        val home = LatLngPoint(24.9200, 67.1200)
+        val query = com.example.data.MasjidRepository.buildOverpassQuery(home, radiusMeters = 10_000)
+        assertTrue(query.contains("[\"building\"=\"mosque\"]"))
+        assertTrue(query.contains("out center 400;"))
+
+        // Mosque behind the house tagged as building=mosque + overlapping unnamed node within 15m, plus a distant 4km masjid
+        val elements = listOf(
+            com.example.data.OverpassElement(
+                type = "way",
+                id = 101L,
+                center = com.example.data.OverpassCenter(24.9207, 67.1200),
+                tags = mapOf("building" to "mosque")
+            ),
+            com.example.data.OverpassElement(
+                type = "node",
+                id = 102L,
+                lat = 24.92075,
+                lon = 67.12005,
+                tags = mapOf("amenity" to "place_of_worship", "religion" to "muslim", "name" to "Masjid Bilal")
+            ),
+            com.example.data.OverpassElement(
+                type = "node",
+                id = 200L,
+                lat = 24.9560,
+                lon = 67.1200,
+                tags = mapOf("amenity" to "place_of_worship", "religion" to "muslim", "name" to "Distant Jamia")
+            )
+        )
+
+        val parsed = com.example.data.MasjidRepository.parseAndDeduplicateOverpassElements(
+            elements = elements,
+            referenceForDistance = home,
+            nowMillis = System.currentTimeMillis(),
+            method = CalculationMethod.KARACHI,
+            madhab = AsrMadhab.HANAFI
+        )
+        assertEquals(2, parsed.size)
+        assertEquals("Masjid Bilal", parsed.first().name)
+        assertTrue("Expected closest masjid within 150m, got ${parsed.first().distanceMeters}", parsed.first().distanceMeters < 150.0)
+    }
+
+    @Test
+    fun quranRecitationLanguagesAndGlobalAyahUrlsAreAccurate() {
+        assertEquals(1, SurahCatalog.globalAyahNumber(1, 1))
+        assertEquals(8, SurahCatalog.globalAyahNumber(2, 1))
+        assertEquals(262, SurahCatalog.globalAyahNumber(2, 255))
+        assertEquals(6236, SurahCatalog.globalAyahNumber(114, 6))
+        assertEquals("002255", SurahCatalog.everyAyahCode(2, 255))
+
+        val arabicUrls = com.example.data.QuranAudioPlayer.buildCandidateAudioUrls(
+            com.example.domain.QuranReciterOption.MISHARY_ALAFASY,
+            surahNumber = 2,
+            ayahNumber = 255
+        )
+        val urduUrls = com.example.data.QuranAudioPlayer.buildCandidateAudioUrls(
+            com.example.domain.QuranReciterOption.URDU_SHAMSHAD_KHAN,
+            surahNumber = 1,
+            ayahNumber = 1
+        )
+        val englishUrls = com.example.data.QuranAudioPlayer.buildCandidateAudioUrls(
+            com.example.domain.QuranReciterOption.ENGLISH_IBRAHIM_WALK,
+            surahNumber = 1,
+            ayahNumber = 1
+        )
+
+        assertTrue(arabicUrls.any { it.contains("ar.alafasy/262.mp3") })
+        assertTrue(arabicUrls.any { it.contains("Alafasy_128kbps/002255.mp3") })
+        assertTrue(urduUrls.any { it.contains("ur.khan/1.mp3") })
+        assertTrue(urduUrls.any { it.contains("urdu_shamshad_ali_khan_46kbps/001001.mp3") })
+        assertTrue(englishUrls.any { it.contains("en.walk/1.mp3") })
+        assertTrue(englishUrls.any { it.contains("Ibrahim_Walk_192kbps/001001.mp3") })
+    }
 }

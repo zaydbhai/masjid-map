@@ -110,6 +110,8 @@ fun MasjidMapScreen(
                 userLocation = state.userLocation,
                 mapCenter = state.mapCenter,
                 masjids = visibleMasjids,
+                roadMetricsById = state.roadMetricsByMasjidId,
+                travelMode = state.travelMode,
                 selectedMasjid = state.selectedMasjid,
                 activeRoute = state.activeRoute,
                 recenterTick = state.recenterTick,
@@ -125,6 +127,7 @@ fun MasjidMapScreen(
             ) {
                 MasjidListView(
                     masjids = visibleMasjids,
+                    roadMetricsById = state.roadMetricsByMasjidId,
                     selectedMasjid = state.selectedMasjid,
                     favoriteMasjidIds = state.favoriteMasjidIds,
                     travelMode = state.travelMode,
@@ -263,6 +266,7 @@ fun MasjidMapScreen(
                 } else if (selected != null) {
                     SelectedMasjidCard(
                         masjid = selected,
+                        roadMetrics = state.roadMetricsByMasjidId[selected.id],
                         travelMode = state.travelMode,
                         isFavorite = state.favoriteMasjidIds.contains(selected.id),
                         isLoadingRoute = state.isLoadingRoute,

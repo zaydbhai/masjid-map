@@ -124,4 +124,27 @@ object SurahCatalog {
 
     fun byNumber(number: Int): SurahInfo =
         surahs.firstOrNull { it.number == number } ?: surahs.first()
+
+    /**
+     * Returns the 1-based global Ayah index (1..6236) used by Islamic Network Audio CDN.
+     */
+    fun globalAyahNumber(surahNumber: Int, ayahNumber: Int): Int {
+        val safeSurah = surahNumber.coerceIn(1, 114)
+        val info = byNumber(safeSurah)
+        val safeAyah = ayahNumber.coerceIn(1, info.ayahCount)
+        var offset = 0
+        for (i in 0 until (safeSurah - 1)) {
+            offset += surahs[i].ayahCount
+        }
+        return offset + safeAyah
+    }
+
+    /**
+     * Returns 6-digit SSSAAA code (e.g., 002255) used by EveryAyah.com.
+     */
+    fun everyAyahCode(surahNumber: Int, ayahNumber: Int): String {
+        val s = surahNumber.coerceIn(1, 114)
+        val a = ayahNumber.coerceIn(1, byNumber(s).ayahCount)
+        return "%03d%03d".format(java.util.Locale.US, s, a)
+    }
 }
