@@ -7,7 +7,10 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -23,6 +26,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -34,6 +39,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -137,80 +143,112 @@ fun AppMainScreen(
         }
     }
 
-    Scaffold(
-        contentWindowInsets = WindowInsets.safeDrawing,
-        snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
-        bottomBar = {
-            NavigationBar(
-                containerColor = MaterialTheme.colorScheme.surfaceContainerLow
-            ) {
-                MainTab.entries.forEach { tab ->
-                    val selected = state.currentTab == tab
-                    val icon = when (tab) {
-                        MainTab.HOME -> if (selected) Icons.Filled.Home else Icons.Outlined.Home
-                        MainTab.MASJIDS -> Icons.Outlined.Mosque
-                        MainTab.QURAN -> if (selected) Icons.AutoMirrored.Filled.MenuBook else Icons.AutoMirrored.Outlined.MenuBook
-                        MainTab.HADITH -> if (selected) Icons.Filled.AutoStories else Icons.Outlined.AutoStories
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val useNavigationRail = maxWidth >= 600.dp
+
+        Scaffold(
+            contentWindowInsets = WindowInsets.safeDrawing,
+            snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
+            bottomBar = {
+                if (!useNavigationRail) {
+                    NavigationBar(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+                    ) {
+                        MainTab.entries.forEach { tab ->
+                            val selected = state.currentTab == tab
+                            val icon = when (tab) {
+                                MainTab.HOME -> if (selected) Icons.Filled.Home else Icons.Outlined.Home
+                                MainTab.MASJIDS -> Icons.Outlined.Mosque
+                                MainTab.QURAN -> if (selected) Icons.AutoMirrored.Filled.MenuBook else Icons.AutoMirrored.Outlined.MenuBook
+                                MainTab.HADITH -> if (selected) Icons.Filled.AutoStories else Icons.Outlined.AutoStories
+                            }
+                            NavigationBarItem(
+                                selected = selected,
+                                onClick = { masjidViewModel.selectTab(tab) },
+                                icon = { Icon(imageVector = icon, contentDescription = tab.label) },
+                                label = { Text(tab.label) },
+                                modifier = Modifier.testTag("nav_tab_${tab.name.lowercase()}")
+                            )
+                        }
                     }
-                    NavigationBarItem(
-                        selected = selected,
-                        onClick = { masjidViewModel.selectTab(tab) },
-                        icon = { Icon(imageVector = icon, contentDescription = tab.label) },
-                        label = { Text(tab.label) },
-                        modifier = Modifier.testTag("nav_tab_${tab.name.lowercase()}")
-                    )
                 }
             }
-        }
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) {
-            when (state.currentTab) {
-                MainTab.HOME -> HomeScreen(
-                    state = state,
-                    onRequestLocation = requestLocationPermission,
-                    onOpenOfflineSheet = masjidViewModel::openOfflineSheet,
-                    onOpenSettings = masjidViewModel::openSettingsSheet,
-                    onOpenWidgetCustomizer = masjidViewModel::openWidgetSheet,
-                    onOpenQibla = masjidViewModel::openQiblaSheet,
-                    onOpenAdhkar = masjidViewModel::openAdhkarSheet,
-                    onOpenHijriDialog = masjidViewModel::openHijriDialog,
-                    onContinueQuran = { surah, ayah ->
-                        masjidViewModel.selectTab(MainTab.QURAN)
-                        quranViewModel.openSurah(surah, initialAyah = ayah)
-                    },
-                    onToggleHadithBookmark = masjidViewModel::toggleHadithOfTheDayBookmark,
-                    onSelectMasjidFromHome = { masjid, showTimes ->
-                        masjidViewModel.selectMasjid(masjid, switchToMap = true)
-                        masjidViewModel.selectTab(MainTab.MASJIDS)
-                        if (showTimes) {
-                            masjidViewModel.openPrayerSheet(masjid)
+        ) { innerPadding ->
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+            ) {
+                if (useNavigationRail) {
+                    NavigationRail(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                        modifier = Modifier.fillMaxHeight()
+                    ) {
+                        MainTab.entries.forEach { tab ->
+                            val selected = state.currentTab == tab
+                            val icon = when (tab) {
+                                MainTab.HOME -> if (selected) Icons.Filled.Home else Icons.Outlined.Home
+                                MainTab.MASJIDS -> Icons.Outlined.Mosque
+                                MainTab.QURAN -> if (selected) Icons.AutoMirrored.Filled.MenuBook else Icons.AutoMirrored.Outlined.MenuBook
+                                MainTab.HADITH -> if (selected) Icons.Filled.AutoStories else Icons.Outlined.AutoStories
+                            }
+                            NavigationRailItem(
+                                selected = selected,
+                                onClick = { masjidViewModel.selectTab(tab) },
+                                icon = { Icon(imageVector = icon, contentDescription = tab.label) },
+                                label = { Text(tab.label) },
+                                modifier = Modifier.testTag("nav_tab_${tab.name.lowercase()}")
+                            )
                         }
-                    },
-                    onNavigateTab = masjidViewModel::selectTab
-                )
+                    }
+                }
 
-                MainTab.MASJIDS -> MasjidMapScreen(
-                    state = state,
-                    viewModel = masjidViewModel,
-                    onRequestLocationPermission = requestLocationPermission,
-                    onOpenOfflineSheet = masjidViewModel::openOfflineSheet,
-                    onOpenQiblaSheet = masjidViewModel::openQiblaSheet
-                )
+                Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                    when (state.currentTab) {
+                        MainTab.HOME -> HomeScreen(
+                            state = state,
+                            onRequestLocation = requestLocationPermission,
+                            onOpenOfflineSheet = masjidViewModel::openOfflineSheet,
+                            onOpenSettings = masjidViewModel::openSettingsSheet,
+                            onOpenWidgetCustomizer = masjidViewModel::openWidgetSheet,
+                            onOpenQibla = masjidViewModel::openQiblaSheet,
+                            onOpenAdhkar = masjidViewModel::openAdhkarSheet,
+                            onOpenHijriDialog = masjidViewModel::openHijriDialog,
+                            onContinueQuran = { surah, ayah ->
+                                masjidViewModel.selectTab(MainTab.QURAN)
+                                quranViewModel.openSurah(surah, initialAyah = ayah)
+                            },
+                            onToggleHadithBookmark = masjidViewModel::toggleHadithOfTheDayBookmark,
+                            onSelectMasjidFromHome = { masjid, showTimes ->
+                                masjidViewModel.selectMasjid(masjid, switchToMap = true)
+                                masjidViewModel.selectTab(MainTab.MASJIDS)
+                                if (showTimes) {
+                                    masjidViewModel.openPrayerSheet(masjid)
+                                }
+                            },
+                            onNavigateTab = masjidViewModel::selectTab
+                        )
 
-                MainTab.QURAN -> QuranScreen(
-                    onOpenSettings = masjidViewModel::openSettingsSheet,
-                    quranViewModel = quranViewModel
-                )
+                        MainTab.MASJIDS -> MasjidMapScreen(
+                            state = state,
+                            viewModel = masjidViewModel,
+                            onRequestLocationPermission = requestLocationPermission,
+                            onOpenOfflineSheet = masjidViewModel::openOfflineSheet,
+                            onOpenQiblaSheet = masjidViewModel::openQiblaSheet
+                        )
 
-                MainTab.HADITH -> HadithScreen(
-                    onOpenSettings = masjidViewModel::openSettingsSheet,
-                    onOpenAdhkar = masjidViewModel::openAdhkarSheet,
-                    hadithViewModel = hadithViewModel
-                )
+                        MainTab.QURAN -> QuranScreen(
+                            onOpenSettings = masjidViewModel::openSettingsSheet,
+                            quranViewModel = quranViewModel
+                        )
+
+                        MainTab.HADITH -> HadithScreen(
+                            onOpenSettings = masjidViewModel::openSettingsSheet,
+                            onOpenAdhkar = masjidViewModel::openAdhkarSheet,
+                            hadithViewModel = hadithViewModel
+                        )
+                    }
+                }
             }
         }
     }

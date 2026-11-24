@@ -5,16 +5,24 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
 import android.location.Geocoder
+import android.location.Location
+import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Build
+import android.os.Bundle
+import android.os.CancellationSignal
+import android.os.Looper
 import androidx.core.content.ContextCompat
 import com.example.domain.LatLngPoint
+import com.google.android.gms.common.ConnectionResult
+import com.google.android.gms.common.GoogleApiAvailability
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import java.io.File
 import java.util.Locale
@@ -46,67 +54,187 @@ class LocationProvider(
         return fine || coarse
     }
 
+    private fun isPlayServicesAvailable(): Boolean {
+        return runCatching {
+            GoogleApiAvailability.getInstance()
+                .isGooglePlayServicesAvailable(context) == ConnectionResult.SUCCESS
+        }.getOrDefault(false)
+    }
+
     @SuppressLint("MissingPermission")
     suspend fun getCurrentOrLastLocation(): LatLngPoint? {
         if (!hasLocationPermission()) return null
 
-        // Try crisp GPS fix first (up to 4.5s), then balanced Wi-Fi/cell fix
-        val highAcc = kotlinx.coroutines.withTimeoutOrNull(4_500L) {
-            getFreshLocation(Priority.PRIORITY_HIGH_ACCURACY)
-        }
-        if (highAcc != null) return highAcc
+        val hasGms = isPlayServicesAvailable()
 
-        val balanced = kotlinx.coroutines.withTimeoutOrNull(3_500L) {
-            getFreshLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY)
+        // 1. If Google Play Services is available (Pixel, Samsung, etc.), try high-accuracy Fused fix
+        if (hasGms) {
+            val highAcc = withTimeoutOrNull(4_500L) {
+                getFreshFusedLocation(Priority.PRIORITY_HIGH_ACCURACY)
+            }
+            if (highAcc != null) return highAcc
         }
-        if (balanced != null) return balanced
 
-        val lastFused = suspendCancellableCoroutine { cont ->
-            fusedClient.lastLocation
-                .addOnSuccessListener { loc ->
-                    if (cont.isActive) {
-                        cont.resume(loc)
+        // 2. Framework LocationManager fresh fix — essential on LineageOS, Waydroid, GrapheneOS, and de-Googled phones
+        val frameworkFresh = withTimeoutOrNull(3_500L) {
+            getFrameworkFreshLocation()
+        }
+        if (frameworkFresh != null) return frameworkFresh
+
+        // 3. Balanced Fused fallback when Play Services is installed
+        if (hasGms) {
+            val balanced = withTimeoutOrNull(3_000L) {
+                getFreshFusedLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY)
+            }
+            if (balanced != null) return balanced
+        }
+
+        // 4. Last-known fix comparison across GMS + framework LocationManager providers
+        val lastFused: Location? = if (hasGms) {
+            withTimeoutOrNull(1_500L) {
+                suspendCancellableCoroutine { cont ->
+                    runCatching {
+                        fusedClient.lastLocation
+                            .addOnSuccessListener { loc ->
+                                if (cont.isActive) cont.resume(loc)
+                            }
+                            .addOnFailureListener {
+                                if (cont.isActive) cont.resume(null)
+                            }
+                    }.onFailure {
+                        if (cont.isActive) cont.resume(null)
                     }
                 }
-                .addOnFailureListener {
-                    if (cont.isActive) cont.resume(null)
-                }
+            }
+        } else {
+            null
         }
 
-        // Compare lastFused vs framework LocationManager and prefer recent & accurate fix
-        val bestFramework = try {
+        val bestKnown = collectBestLastKnownFramework(lastFused)
+        return bestKnown?.let { LatLngPoint(it.latitude, it.longitude) }
+    }
+
+    @SuppressLint("MissingPermission")
+    private suspend fun getFreshFusedLocation(priority: Int): LatLngPoint? =
+        suspendCancellableCoroutine { cont ->
+            val tokenSource = CancellationTokenSource()
+            cont.invokeOnCancellation { tokenSource.cancel() }
+            try {
+                fusedClient.getCurrentLocation(priority, tokenSource.token)
+                    .addOnSuccessListener { loc ->
+                        if (cont.isActive) {
+                            cont.resume(loc?.let { LatLngPoint(it.latitude, it.longitude) })
+                        }
+                    }
+                    .addOnFailureListener {
+                        if (cont.isActive) cont.resume(null)
+                    }
+            } catch (_: Throwable) {
+                if (cont.isActive) cont.resume(null)
+            }
+        }
+
+    @SuppressLint("MissingPermission")
+    private suspend fun getFrameworkFreshLocation(): LatLngPoint? {
+        val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return null
+        val fineGranted = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+
+        val candidateProviders = buildList {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                add(LocationManager.FUSED_PROVIDER)
+            }
+            if (fineGranted) {
+                add(LocationManager.GPS_PROVIDER)
+            }
+            add(LocationManager.NETWORK_PROVIDER)
+            if (!fineGranted) {
+                add(LocationManager.GPS_PROVIDER)
+            }
+        }.filter { provider ->
+            runCatching { lm.isProviderEnabled(provider) }.getOrDefault(false)
+        }
+
+        for (provider in candidateProviders) {
+            val point = withTimeoutOrNull(2_000L) {
+                requestSingleFrameworkFix(lm, provider)
+            }
+            if (point != null) return point
+        }
+        return null
+    }
+
+    @SuppressLint("MissingPermission")
+    private suspend fun requestSingleFrameworkFix(
+        lm: LocationManager,
+        provider: String
+    ): LatLngPoint? = suspendCancellableCoroutine { cont ->
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val signal = CancellationSignal()
+            cont.invokeOnCancellation { signal.cancel() }
+            try {
+                lm.getCurrentLocation(
+                    provider,
+                    signal,
+                    ContextCompat.getMainExecutor(context)
+                ) { location ->
+                    if (cont.isActive) {
+                        cont.resume(location?.let { LatLngPoint(it.latitude, it.longitude) })
+                    }
+                }
+            } catch (_: Throwable) {
+                if (cont.isActive) cont.resume(null)
+            }
+        } else {
+            val listener = object : LocationListener {
+                override fun onLocationChanged(location: Location) {
+                    runCatching { lm.removeUpdates(this) }
+                    if (cont.isActive) {
+                        cont.resume(LatLngPoint(location.latitude, location.longitude))
+                    }
+                }
+
+                @Deprecated("Deprecated in Java")
+                override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) = Unit
+                override fun onProviderEnabled(provider: String) = Unit
+                override fun onProviderDisabled(provider: String) = Unit
+            }
+            cont.invokeOnCancellation { runCatching { lm.removeUpdates(listener) } }
+            try {
+                @Suppress("DEPRECATION")
+                lm.requestSingleUpdate(provider, listener, Looper.getMainLooper())
+            } catch (_: Throwable) {
+                runCatching { lm.removeUpdates(listener) }
+                if (cont.isActive) cont.resume(null)
+            }
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun collectBestLastKnownFramework(seed: Location?): Location? {
+        return try {
             val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
-            val gps = lm?.getLastKnownLocation(LocationManager.GPS_PROVIDER)
-            val net = lm?.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
-            val passive = lm?.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER)
-            listOfNotNull(lastFused, gps, net, passive)
+            val providers = buildList {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    add(LocationManager.FUSED_PROVIDER)
+                }
+                add(LocationManager.GPS_PROVIDER)
+                add(LocationManager.NETWORK_PROVIDER)
+                add(LocationManager.PASSIVE_PROVIDER)
+            }
+            val frameworkFixes = providers.mapNotNull { provider ->
+                runCatching { lm?.getLastKnownLocation(provider) }.getOrNull()
+            }
+            (listOfNotNull(seed) + frameworkFixes)
                 .sortedWith(
-                    compareByDescending<android.location.Location> { it.time }
+                    compareByDescending<Location> { it.time }
                         .thenBy { it.accuracy }
                 )
                 .firstOrNull()
         } catch (_: Exception) {
-            lastFused
-        }
-        return bestFramework?.let { LatLngPoint(it.latitude, it.longitude) }
-    }
-
-    @SuppressLint("MissingPermission")
-    private suspend fun getFreshLocation(priority: Int): LatLngPoint? = suspendCancellableCoroutine { cont ->
-        val tokenSource = CancellationTokenSource()
-        cont.invokeOnCancellation { tokenSource.cancel() }
-        try {
-            fusedClient.getCurrentLocation(priority, tokenSource.token)
-                .addOnSuccessListener { loc ->
-                    if (cont.isActive) {
-                        cont.resume(loc?.let { LatLngPoint(it.latitude, it.longitude) })
-                    }
-                }
-                .addOnFailureListener {
-                    if (cont.isActive) cont.resume(null)
-                }
-        } catch (_: Exception) {
-            if (cont.isActive) cont.resume(null)
+            seed
         }
     }
 
