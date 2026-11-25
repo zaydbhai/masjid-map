@@ -116,7 +116,13 @@ data class Masjid(
     val isOpenNow: Boolean? = null,
     val source: MasjidSource,
     val qiblaBearingDegrees: Double,
-    val prayerSchedule: PrayerSchedule
+    val prayerSchedule: PrayerSchedule,
+    val wheelchairAccessible: Boolean? = null,
+    val hasParking: Boolean? = null,
+    val hasWomenSection: Boolean? = null,
+    val phone: String? = null,
+    val website: String? = null,
+    val openingHours: String? = null
 )
 
 data class MasjidRoadMetrics(
@@ -280,6 +286,24 @@ enum class QuranReciterOption(
     }
 }
 
+enum class SleepTimerOption(
+    val id: String,
+    val label: String,
+    val shortBadge: String,
+    val durationMinutes: Int?
+) {
+    OFF("off", "Sleep Timer Off", "Timer", null),
+    MIN_15("15m", "15 minutes", "15m", 15),
+    MIN_30("30m", "30 minutes", "30m", 30),
+    MIN_60("60m", "60 minutes", "60m", 60),
+    END_OF_SURAH("end_of_surah", "End of Surah", "End", null);
+
+    companion object {
+        fun fromId(id: String?): SleepTimerOption =
+            entries.firstOrNull { it.id == id } ?: OFF
+    }
+}
+
 enum class QuranTranslationOption(
     val editionId: String,
     val displayName: String,
@@ -421,17 +445,96 @@ enum class AppThemeMode(
 
 enum class PrayerAlertSound(
     val id: String,
-    val displayName: String
+    val displayName: String,
+    val isAdhanAudio: Boolean = false
 ) {
-    DEFAULT_CHIME("chime", "Chime & Banner"),
-    VIBRATE_ONLY("vibrate", "Vibrate Only"),
-    SILENT("silent", "Silent Banner");
+    DEFAULT_CHIME("chime", "Chime & Banner", false),
+    ADHAN_MAKKAH("adhan_makkah", "Adhan · Makkah", true),
+    ADHAN_MADINAH("adhan_madinah", "Adhan · Madinah", true),
+    ADHAN_TAKBEER("adhan_takbeer", "Short Takbeer", true),
+    VIBRATE_ONLY("vibrate", "Vibrate Only", false),
+    SILENT("silent", "Silent Banner", false);
 
     companion object {
         fun fromId(id: String?): PrayerAlertSound =
             entries.firstOrNull { it.id == id } ?: DEFAULT_CHIME
     }
 }
+
+data class JumuahTimes(
+    val firstKhutbah: String = "",
+    val secondKhutbah: String = ""
+) {
+    val isConfigured: Boolean
+        get() = firstKhutbah.isNotBlank() || secondKhutbah.isNotBlank()
+
+    fun summaryText(): String = listOfNotNull(
+        firstKhutbah.takeIf { it.isNotBlank() }?.let { "1st: $it" },
+        secondKhutbah.takeIf { it.isNotBlank() }?.let { "2nd: $it" }
+    ).joinToString(" · ")
+}
+
+enum class PrayerLogStatus(
+    val id: String,
+    val shortLabel: String,
+    val displayName: String
+) {
+    UNLOGGED("unlogged", "Pending", "Not Logged"),
+    IN_MASJID("masjid", "Masjid", "Prayed in Masjid"),
+    ON_TIME("ontime", "On Time", "Prayed on Time"),
+    LATE("late", "Late", "Prayed Late"),
+    QADA("qada", "Qada", "Made Up (Qada)");
+
+    val isCompleted: Boolean
+        get() = this != UNLOGGED
+
+    fun nextCycle(): PrayerLogStatus = when (this) {
+        UNLOGGED -> IN_MASJID
+        IN_MASJID -> ON_TIME
+        ON_TIME -> LATE
+        LATE -> QADA
+        QADA -> UNLOGGED
+    }
+
+    companion object {
+        fun fromId(id: String?): PrayerLogStatus =
+            entries.firstOrNull { it.id == id } ?: UNLOGGED
+    }
+}
+
+data class DailyWorshipLog(
+    val dateKey: String,
+    val prayerStatuses: Map<PrayerName, PrayerLogStatus> = emptyMap(),
+    val fasted: Boolean = false
+) {
+    val completedPrayersCount: Int
+        get() = trackedPrayers.count { p -> prayerStatuses[p]?.isCompleted == true }
+
+    val inMasjidCount: Int
+        get() = trackedPrayers.count { p -> prayerStatuses[p] == PrayerLogStatus.IN_MASJID }
+
+    companion object {
+        val trackedPrayers = listOf(
+            PrayerName.FAJR,
+            PrayerName.DHUHR,
+            PrayerName.ASR,
+            PrayerName.MAGHRIB,
+            PrayerName.ISHA
+        )
+    }
+}
+
+data class NightWorshipWindows(
+    val suhoorEndsFormatted: String,
+    val suhoorEndsMillis: Long,
+    val duhaStartFormatted: String,
+    val iftarFormatted: String,
+    val iftarMillis: Long,
+    val midnightFormatted: String,
+    val lastThirdStartFormatted: String,
+    val nextFastEventLabel: String,
+    val millisUntilFastEvent: Long
+)
 
 data class QuranBookmark(
     val chapter: Int,

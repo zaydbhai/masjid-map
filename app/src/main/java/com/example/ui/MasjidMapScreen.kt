@@ -8,6 +8,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -30,6 +31,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Accessible
 import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
@@ -69,6 +71,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.domain.Masjid
+import com.example.domain.PrayerTimeCalculator
 import com.example.domain.TravelMode
 import com.example.ui.components.ActiveRouteCard
 import com.example.ui.components.MasjidListView
@@ -86,11 +89,16 @@ fun MasjidMapScreen(
 ) {
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
-    val visibleMasjids = remember(state.masjids, state.showOnlyFavoriteMasjids, state.favoriteMasjidIds) {
-        if (state.showOnlyFavoriteMasjids) {
-            state.masjids.filter { state.favoriteMasjidIds.contains(it.id) }
-        } else {
-            state.masjids
+    val visibleMasjids = remember(
+        state.masjids,
+        state.showOnlyFavoriteMasjids,
+        state.showOnlyWheelchairMasjids,
+        state.favoriteMasjidIds
+    ) {
+        state.masjids.filter { masjid ->
+            val favOk = !state.showOnlyFavoriteMasjids || state.favoriteMasjidIds.contains(masjid.id)
+            val wheelOk = !state.showOnlyWheelchairMasjids || masjid.wheelchairAccessible == true
+            favOk && wheelOk
         }
     }
 
@@ -116,6 +124,7 @@ fun MasjidMapScreen(
                 activeRoute = state.activeRoute,
                 recenterTick = state.recenterTick,
                 onSelectMasjid = { viewModel.selectMasjid(it) },
+                onViewportMoved = viewModel::onMapViewportChanged,
                 modifier = Modifier.fillMaxSize()
             )
         } else {
@@ -187,8 +196,10 @@ fun MasjidMapScreen(
                 selectedMasjid = state.selectedMasjid,
                 radiusKm = state.searchRadiusKm,
                 showOnlyFavorites = state.showOnlyFavoriteMasjids,
+                showOnlyWheelchair = state.showOnlyWheelchairMasjids,
                 favoritesCount = state.favoriteMasjidIds.size,
                 onToggleFavoritesFilter = viewModel::toggleFavoritesFilter,
+                onToggleWheelchairFilter = viewModel::toggleWheelchairFilter,
                 onOpenQibla = onOpenQiblaSheet,
                 onSelectNearest = viewModel::selectNearestMasjid,
                 onCycleRadius = viewModel::cycleSearchRadius,
@@ -198,6 +209,61 @@ fun MasjidMapScreen(
                     if (target != null) viewModel.openPrayerSheet(target)
                 }
             )
+
+            val showSearchThisArea = state.viewMode == ViewMode.MAP &&
+                !state.isLoadingMasjids &&
+                state.viewportCenter != null &&
+                state.searchReferenceLocation != null &&
+                PrayerTimeCalculator.distanceMeters(state.viewportCenter, state.searchReferenceLocation) > 1_200.0
+
+            if (showSearchThisArea) {
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+                    shadowElevation = 3.dp,
+                    modifier = Modifier
+                        .align(Alignment.CenterHorizontally)
+                        .clip(RoundedCornerShape(20.dp))
+                        .clickable { viewModel.searchThisArea() }
+                        .testTag("search_this_area_button")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Search,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = "Search this area",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                }
+            }
+
+            if (state.offlineNotice != null) {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.92f),
+                    modifier = Modifier
+                        .align(Alignment.CenterHorizontally)
+                        .testTag("masjid_offline_notice")
+                ) {
+                    Text(
+                        text = state.offlineNotice,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                    )
+                }
+            }
         }
 
         // Location Permission Card (when GPS permission isn't granted & no masjids loaded yet)
@@ -292,10 +358,10 @@ private fun TopSearchAndModeBar(
     onOpenSettings: () -> Unit
 ) {
     Surface(
-        shape = RoundedCornerShape(28.dp),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-        tonalElevation = 6.dp,
-        shadowElevation = 6.dp,
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.97f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)),
+        shadowElevation = 2.dp,
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
@@ -414,8 +480,10 @@ private fun QuickActionChipsRow(
     selectedMasjid: Masjid?,
     radiusKm: Int,
     showOnlyFavorites: Boolean,
+    showOnlyWheelchair: Boolean,
     favoritesCount: Int,
     onToggleFavoritesFilter: () -> Unit,
+    onToggleWheelchairFilter: () -> Unit,
     onOpenQibla: () -> Unit,
     onSelectNearest: () -> Unit,
     onCycleRadius: () -> Unit,
@@ -464,6 +532,21 @@ private fun QuickActionChipsRow(
             },
             shape = RoundedCornerShape(16.dp),
             modifier = Modifier.testTag("masjids_favorites_chip")
+        )
+
+        FilterChip(
+            selected = showOnlyWheelchair,
+            onClick = onToggleWheelchairFilter,
+            label = { Text("Accessible") },
+            leadingIcon = {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.Accessible,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+            },
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.testTag("masjids_wheelchair_chip")
         )
 
         AssistChip(
@@ -543,8 +626,11 @@ private fun QuickActionChipsRow(
 private fun LocationOnboardingCard(
     onEnableLocation: () -> Unit
 ) {
-    ElevatedCard(
+    Surface(
         shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLowest,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+        shadowElevation = 2.dp,
         modifier = Modifier.widthIn(max = 400.dp)
     ) {
         Column(

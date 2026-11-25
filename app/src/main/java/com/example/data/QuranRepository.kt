@@ -15,6 +15,8 @@ import java.io.File
 
 class QuranRepository(private val context: Context) {
 
+    private val networkMonitor by lazy { NetworkMonitor(context.applicationContext) }
+
     private val cacheDir: File by lazy {
         File(context.filesDir, "quran_cache").apply { mkdirs() }
     }
@@ -137,6 +139,9 @@ class QuranRepository(private val context: Context) {
         requireArabicScript: Boolean,
         onChapterProgress: (Int) -> Unit
     ) {
+        if (!networkMonitor.isCurrentlyOnline()) {
+            throw IllegalStateException("Offline: Connect to the internet to download Qur'an text.")
+        }
         val candidateEditions = if (edition == arabicEdition) {
             listOf(arabicEdition, "ara-quranuthmanienc", "ara-quranacademy")
         } else {
@@ -211,6 +216,10 @@ class QuranRepository(private val context: Context) {
                 parseAndVerifyChapterJson(cacheFile.readText(), expectedAyahCount, requireArabicScript)
             }.getOrNull()
             if (cached != null) return cached
+        }
+
+        if (!networkMonitor.isCurrentlyOnline()) {
+            throw IllegalStateException("Offline: Surah $chapter is not downloaded yet.")
         }
 
         val candidateEditions = if (edition == arabicEdition) {

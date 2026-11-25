@@ -4,13 +4,20 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.os.Build
+import android.os.PowerManager
 import com.example.domain.QuranReciterOption
 import com.example.domain.SurahCatalog
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import okhttp3.Request
 import java.io.File
 import java.io.FileOutputStream
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Manages streaming, local offline MP3 caching, and MediaPlayer playback for
@@ -18,8 +25,11 @@ import java.io.FileOutputStream
  */
 class QuranAudioPlayer(private val context: Context) {
 
+    private val appContext = context.applicationContext
+    private val networkMonitor by lazy { NetworkMonitor(appContext) }
+
     private val audioCacheRoot: File by lazy {
-        File(context.filesDir, "quran_audio_cache").apply { mkdirs() }
+        File(appContext.filesDir, "quran_audio_cache").apply { mkdirs() }
     }
 
     private var mediaPlayer: MediaPlayer? = null
@@ -37,11 +47,58 @@ class QuranAudioPlayer(private val context: Context) {
     }
 
     fun getCachedAyahCount(reciter: QuranReciterOption, surahNumber: Int, ayahCount: Int): Int {
+        val dir = File(audioCacheRoot, reciter.id)
+        if (!dir.exists()) return 0
         var count = 0
         for (ayah in 1..ayahCount) {
-            if (isAyahCached(reciter, surahNumber, ayah)) count++
+            val code = SurahCatalog.everyAyahCode(surahNumber, ayah)
+            val f = File(dir, "$code.mp3")
+            if (f.exists() && f.length() > MIN_VALID_MP3_BYTES) count++
         }
         return count
+    }
+
+    fun isSurahAudioComplete(reciter: QuranReciterOption, surahNumber: Int, ayahCount: Int): Boolean =
+        getCachedAyahCount(reciter, surahNumber, ayahCount) >= ayahCount
+
+    fun getFullAudioCachedSurahNumbers(reciter: QuranReciterOption): Set<Int> {
+        val dir = File(audioCacheRoot, reciter.id)
+        if (!dir.exists()) return emptySet()
+        val files = dir.listFiles()?.mapNotNull { f ->
+            if (f.isFile && f.length() > MIN_VALID_MP3_BYTES && f.name.endsWith(".mp3")) {
+                f.name.removeSuffix(".mp3")
+            } else {
+                null
+            }
+        }?.toHashSet() ?: return emptySet()
+
+        if (files.isEmpty()) return emptySet()
+        val ready = HashSet<Int>()
+        for (surah in SurahCatalog.surahs) {
+            var complete = true
+            for (ayah in 1..surah.ayahCount) {
+                if (!files.contains(SurahCatalog.everyAyahCode(surah.number, ayah))) {
+                    complete = false
+                    break
+                }
+            }
+            if (complete) ready.add(surah.number)
+        }
+        return ready
+    }
+
+    fun getCachedReciterIds(): Set<String> {
+        if (!audioCacheRoot.exists()) return emptySet()
+        return QuranReciterOption.entries.filter { reciter ->
+            val dir = File(audioCacheRoot, reciter.id)
+            dir.exists() && (dir.listFiles()?.any { it.isFile && it.length() > MIN_VALID_MP3_BYTES } == true)
+        }.map { it.id }.toSet()
+    }
+
+    fun getReciterCacheSizeBytes(reciter: QuranReciterOption): Long {
+        val dir = File(audioCacheRoot, reciter.id)
+        if (!dir.exists()) return 0L
+        return dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
     }
 
     fun getCacheSizeBytes(): Long =
@@ -60,6 +117,12 @@ class QuranAudioPlayer(private val context: Context) {
         val target = localAyahFile(reciter, surahNumber, ayahNumber)
         if (target.exists() && target.length() > MIN_VALID_MP3_BYTES) {
             return@withContext target
+        }
+
+        if (!networkMonitor.isCurrentlyOnline()) {
+            throw IllegalStateException(
+                "Offline: Ayah $surahNumber:$ayahNumber (${reciter.shortLabel}) isn't downloaded yet."
+            )
         }
 
         val urls = buildCandidateAudioUrls(reciter, surahNumber, ayahNumber)
@@ -103,13 +166,38 @@ class QuranAudioPlayer(private val context: Context) {
         ayahCount: Int,
         onProgress: (completedAyahs: Int, totalAyahs: Int) -> Unit
     ): Int = withContext(Dispatchers.IO) {
-        var done = 0
-        for (ayah in 1..ayahCount) {
-            ensureAyahAudioCached(reciter, surahNumber, ayah)
-            done++
-            onProgress(done, ayahCount)
+        val completed = AtomicInteger(0)
+        val semaphore = Semaphore(4)
+        coroutineScope {
+            (1..ayahCount).map { ayah ->
+                async {
+                    semaphore.withPermit {
+                        ensureAyahAudioCached(reciter, surahNumber, ayah)
+                        val done = completed.incrementAndGet()
+                        onProgress(done, ayahCount)
+                    }
+                }
+            }.awaitAll()
         }
-        done
+        completed.get()
+    }
+
+    suspend fun downloadEssentialSurahsAudioOffline(
+        reciter: QuranReciterOption,
+        onProgress: (completedSurahs: Int, totalSurahs: Int, currentSurahName: String) -> Unit
+    ): Int = withContext(Dispatchers.IO) {
+        val targets = ESSENTIAL_AUDIO_SURAH_NUMBERS.sorted()
+        val total = targets.size
+        var doneSurahs = 0
+        for (surahNum in targets) {
+            val info = SurahCatalog.byNumber(surahNum)
+            if (!isSurahAudioComplete(reciter, info.number, info.ayahCount)) {
+                downloadSurahAudioOffline(reciter, info.number, info.ayahCount) { _, _ -> }
+            }
+            doneSurahs++
+            onProgress(doneSurahs, total, info.nameEnglish)
+        }
+        doneSurahs
     }
 
     fun playLocalFile(
@@ -122,6 +210,7 @@ class QuranAudioPlayer(private val context: Context) {
         stop()
         try {
             val player = MediaPlayer().apply {
+                setWakeMode(appContext, PowerManager.PARTIAL_WAKE_LOCK)
                 setAudioAttributes(
                     AudioAttributes.Builder()
                         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
@@ -219,6 +308,14 @@ class QuranAudioPlayer(private val context: Context) {
 
     companion object {
         private const val MIN_VALID_MP3_BYTES = 512L
+
+        /**
+         * 43 most-recited Surahs for offline listening:
+         * Al-Fatihah (1), Al-Kahf (18), Ya-Sin (36), Ar-Rahman (55), Al-Waqi'ah (56),
+         * Al-Mulk (67), and complete Juz 'Amma (78..114).
+         */
+        val ESSENTIAL_AUDIO_SURAH_NUMBERS: Set<Int> =
+            (setOf(1, 18, 36, 55, 56, 67) + (78..114)).toSet()
 
         fun buildCandidateAudioUrls(
             reciter: QuranReciterOption,

@@ -44,12 +44,19 @@ interface OverpassApi {
     ): OverpassResponse
 }
 
-// ---- OpenStreetMap Nominatim Geocoding (100% Free, Zero API Key) ----
+// ---- OpenStreetMap Nominatim Geocoding & POI Search (100% Free, Zero API Key) ----
 
 data class NominatimResult(
     @Json(name = "lat") val lat: String,
     @Json(name = "lon") val lon: String,
-    @Json(name = "display_name") val displayName: String? = null
+    @Json(name = "display_name") val displayName: String? = null,
+    @Json(name = "osm_type") val osmType: String? = null,
+    @Json(name = "osm_id") val osmId: Long? = null,
+    @Json(name = "name") val name: String? = null,
+    @Json(name = "category") val category: String? = null,
+    @Json(name = "type") val type: String? = null,
+    @Json(name = "address") val address: Map<String, String>? = null,
+    @Json(name = "extratags") val extratags: Map<String, String>? = null
 )
 
 interface NominatimApi {
@@ -58,8 +65,63 @@ interface NominatimApi {
         @Query("q") query: String,
         @Query("format") format: String = "json",
         @Query("limit") limit: Int = 1,
-        @Header("User-Agent") userAgent: String = "MasjidMapAndroid/1.0"
+        @Header("User-Agent") userAgent: String = USER_AGENT
     ): List<NominatimResult>
+
+    @GET("search")
+    suspend fun searchPois(
+        @Query("q") query: String,
+        @Query("format") format: String = "jsonv2",
+        @Query("viewbox") viewbox: String,
+        @Query("bounded") bounded: Int = 1,
+        @Query("limit") limit: Int = 40,
+        @Query("addressdetails") addressDetails: Int = 1,
+        @Query("extratags") extratags: Int = 1,
+        @Header("User-Agent") userAgent: String = USER_AGENT
+    ): List<NominatimResult>
+
+    companion object {
+        const val USER_AGENT = "MasjidMapAndroid/1.0 (+https://openstreetmap.org)"
+    }
+}
+
+// ---- Photon (Komoot) Free OSM POI & Geocoding Fallback (100% Free, Zero API Key) ----
+
+data class PhotonGeometry(
+    val coordinates: List<Double> = emptyList()
+)
+
+data class PhotonProperties(
+    @Json(name = "osm_id") val osmId: Long? = null,
+    @Json(name = "osm_type") val osmType: String? = null,
+    @Json(name = "osm_key") val osmKey: String? = null,
+    @Json(name = "osm_value") val osmValue: String? = null,
+    val name: String? = null,
+    val street: String? = null,
+    val housenumber: String? = null,
+    val district: String? = null,
+    val city: String? = null,
+    val state: String? = null,
+    val country: String? = null
+)
+
+data class PhotonFeature(
+    val geometry: PhotonGeometry? = null,
+    val properties: PhotonProperties? = null
+)
+
+data class PhotonResponse(
+    val features: List<PhotonFeature> = emptyList()
+)
+
+interface PhotonApi {
+    @GET("api/")
+    suspend fun search(
+        @Query("q") query: String,
+        @Query("lat") lat: Double? = null,
+        @Query("lon") lon: Double? = null,
+        @Query("limit") limit: Int = 25
+    ): PhotonResponse
 }
 
 // ---- OSRM Routing API (100% Free, Zero API Key) ----
@@ -132,28 +194,54 @@ object NetworkClients {
             level = HttpLoggingInterceptor.Level.BASIC
         }
         OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(25, TimeUnit.SECONDS)
+            .connectTimeout(12, TimeUnit.SECONDS)
+            .readTimeout(22, TimeUnit.SECONDS)
+            .addInterceptor { chain ->
+                val original = chain.request()
+                val req = if (original.header("User-Agent").isNullOrBlank()) {
+                    original.newBuilder()
+                        .header("User-Agent", NominatimApi.USER_AGENT)
+                        .build()
+                } else {
+                    original
+                }
+                chain.proceed(req)
+            }
             .addInterceptor(logging)
             .build()
     }
 
-    val overpassPrimaryApi: OverpassApi by lazy {
+    private fun createOverpassApi(baseUrl: String): OverpassApi =
         Retrofit.Builder()
-            .baseUrl("https://overpass-api.de/")
+            .baseUrl(baseUrl)
             .client(okHttpClient)
             .addConverterFactory(moshiConverterFactory)
             .build()
             .create(OverpassApi::class.java)
+
+    val overpassPrimaryApi: OverpassApi by lazy {
+        createOverpassApi("https://overpass-api.de/")
     }
 
     val overpassMirrorApi: OverpassApi by lazy {
-        Retrofit.Builder()
-            .baseUrl("https://overpass.kumi.systems/")
-            .client(okHttpClient)
-            .addConverterFactory(moshiConverterFactory)
-            .build()
-            .create(OverpassApi::class.java)
+        createOverpassApi("https://overpass.kumi.systems/")
+    }
+
+    val overpassPrivateCoffeeApi: OverpassApi by lazy {
+        createOverpassApi("https://overpass.private.coffee/")
+    }
+
+    val overpassMailRuApi: OverpassApi by lazy {
+        createOverpassApi("https://maps.mail.ru/osm/tools/overpass/")
+    }
+
+    val overpassMirrors: List<OverpassApi> by lazy {
+        listOf(
+            overpassPrimaryApi,
+            overpassMirrorApi,
+            overpassPrivateCoffeeApi,
+            overpassMailRuApi
+        )
     }
 
     val nominatimApi: NominatimApi by lazy {
@@ -163,6 +251,15 @@ object NetworkClients {
             .addConverterFactory(moshiConverterFactory)
             .build()
             .create(NominatimApi::class.java)
+    }
+
+    val photonApi: PhotonApi by lazy {
+        Retrofit.Builder()
+            .baseUrl("https://photon.komoot.io/")
+            .client(okHttpClient)
+            .addConverterFactory(moshiConverterFactory)
+            .build()
+            .create(PhotonApi::class.java)
     }
 
     val osrmApi: OsrmApi by lazy {

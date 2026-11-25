@@ -1,6 +1,7 @@
 package com.example.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -33,9 +34,9 @@ import androidx.compose.material.icons.filled.SelfImprovement
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -47,6 +48,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -73,6 +76,9 @@ fun HadithScreen(
     val state by hadithViewModel.uiState.collectAsStateWithLifecycle()
     val reading = LocalReadingTypography.current
     val context = LocalContext.current
+    val borderColor = MaterialTheme.colorScheme.outlineVariant.copy(
+        alpha = if (reading.highContrastLargePrint) 0.9f else 0.55f
+    )
     val bookmarkedIds = remember(state.bookmarkedHadiths) {
         state.bookmarkedHadiths.map { it.id }.toSet()
     }
@@ -94,8 +100,8 @@ fun HadithScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                    .padding(horizontal = 20.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -106,6 +112,7 @@ fun HadithScreen(
                         Text(
                             text = "Hadith Library",
                             style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onBackground
                         )
                         Text(
@@ -118,7 +125,7 @@ fun HadithScreen(
                         FilledTonalButton(
                             onClick = { hadithViewModel.downloadEssentialHadithPack() },
                             enabled = !state.isDownloadingEssentialPack,
-                            shape = RoundedCornerShape(14.dp),
+                            shape = RoundedCornerShape(12.dp),
                             modifier = Modifier.testTag("hadith_essential_pack_button")
                         ) {
                             Icon(
@@ -209,15 +216,16 @@ fun HadithScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .testTag("hadith_books_list"),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 if (state.showSavedBookmarks) {
                     if (state.bookmarkedHadiths.isEmpty()) {
                         item(key = "empty_hadith_bookmarks") {
                             Surface(
                                 shape = RoundedCornerShape(18.dp),
-                                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                                color = MaterialTheme.colorScheme.surfaceContainerLowest,
+                                border = BorderStroke(1.dp, borderColor),
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(vertical = 12.dp)
@@ -227,7 +235,7 @@ fun HadithScreen(
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     textAlign = TextAlign.Center,
-                                    modifier = Modifier.padding(20.dp)
+                                    modifier = Modifier.padding(24.dp)
                                 )
                             }
                         }
@@ -236,6 +244,7 @@ fun HadithScreen(
                             HadithNarrationCard(
                                 hadith = saved,
                                 isBookmarked = true,
+                                borderColor = borderColor,
                                 onToggleBookmark = { hadithViewModel.toggleBookmark(saved) },
                                 onShare = { shareHadith(context, saved) }
                             )
@@ -257,6 +266,7 @@ fun HadithScreen(
                         items(state.globalSearchHits, key = { "hit_${it.bookId}_${it.entry.id}" }) { hit ->
                             HadithSearchHitCard(
                                 hit = hit,
+                                borderColor = borderColor,
                                 onClick = { hadithViewModel.openSearchHit(hit) }
                             )
                         }
@@ -267,6 +277,7 @@ fun HadithScreen(
                             book = book,
                             isOfflineReady = state.offlineReadyBookIds.contains(book.id),
                             isDownloading = state.downloadingBookId == book.id,
+                            borderColor = borderColor,
                             arabicFontFamily = reading.arabicFontFamily,
                             onDownloadOffline = { hadithViewModel.downloadBookOffline(book) },
                             onClick = { hadithViewModel.openBook(book) }
@@ -277,48 +288,50 @@ fun HadithScreen(
         } else {
             // Top Bar for Chapters / Hadiths
             Surface(
-                color = MaterialTheme.colorScheme.surfaceContainerLow,
-                tonalElevation = 2.dp
+                color = MaterialTheme.colorScheme.surfaceContainerLowest
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(
-                        onClick = { hadithViewModel.navigateBackInsideHadith() },
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Row(
                         modifier = Modifier
-                            .size(48.dp)
-                            .testTag("hadith_back_button")
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back"
-                        )
+                        IconButton(
+                            onClick = { hadithViewModel.navigateBackInsideHadith() },
+                            modifier = Modifier
+                                .size(48.dp)
+                                .testTag("hadith_back_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back"
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = selectedChapter?.titleEnglish ?: selectedBook.titleEnglish,
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = if (selectedChapter != null) selectedBook.titleEnglish else selectedBook.compiler,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        IconButton(
+                            onClick = onOpenSettings,
+                            modifier = Modifier.size(48.dp)
+                        ) {
+                            Icon(Icons.Filled.Tune, contentDescription = "Font settings")
+                        }
                     }
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = selectedChapter?.titleEnglish ?: selectedBook.titleEnglish,
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = if (selectedChapter != null) selectedBook.titleEnglish else selectedBook.compiler,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                    IconButton(
-                        onClick = onOpenSettings,
-                        modifier = Modifier.size(48.dp)
-                    ) {
-                        Icon(Icons.Filled.Tune, contentDescription = "Font settings")
-                    }
+                    HorizontalDivider(thickness = 1.dp, color = borderColor)
                 }
             }
 
@@ -364,12 +377,13 @@ fun HadithScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .testTag("hadith_chapters_list"),
-                    contentPadding = PaddingValues(16.dp),
+                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 14.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     items(state.chapters, key = { it.id }) { chapter ->
                         HadithChapterCard(
                             chapter = chapter,
+                            borderColor = borderColor,
                             arabicFontFamily = reading.arabicFontFamily,
                             onClick = { hadithViewModel.openChapter(chapter) }
                         )
@@ -394,7 +408,7 @@ fun HadithScreen(
                         shape = RoundedCornerShape(16.dp),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 10.dp)
+                            .padding(horizontal = 20.dp, vertical = 12.dp)
                     )
 
                     val query = state.hadithSearchQuery.trim()
@@ -413,13 +427,14 @@ fun HadithScreen(
                         modifier = Modifier
                             .fillMaxSize()
                             .testTag("hadiths_reader_list"),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
                         items(visibleHadiths, key = { it.id }) { hadith ->
                             HadithNarrationCard(
                                 hadith = hadith,
                                 isBookmarked = bookmarkedIds.contains(hadith.id),
+                                borderColor = borderColor,
                                 onToggleBookmark = { hadithViewModel.toggleBookmark(hadith) },
                                 onShare = { shareHadith(context, hadith) }
                             )
@@ -434,17 +449,21 @@ fun HadithScreen(
 @Composable
 private fun HadithSearchHitCard(
     hit: HadithSearchHit,
+    borderColor: Color,
     onClick: () -> Unit
 ) {
-    ElevatedCard(
+    Surface(
         shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLowest,
+        border = BorderStroke(1.dp, borderColor),
         modifier = Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
             .clickable(onClick = onClick)
     ) {
         Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Text(
                 text = "${hit.bookTitle} · ${hit.entry.numberLabel}",
@@ -467,21 +486,25 @@ private fun HadithBookCard(
     book: HadithBookInfo,
     isOfflineReady: Boolean,
     isDownloading: Boolean,
+    borderColor: Color,
     arabicFontFamily: androidx.compose.ui.text.font.FontFamily,
     onDownloadOffline: () -> Unit,
     onClick: () -> Unit
 ) {
-    ElevatedCard(
+    Surface(
         shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLowest,
+        border = BorderStroke(1.dp, borderColor),
         modifier = Modifier
             .fillMaxWidth()
             .widthIn(max = 600.dp)
+            .clip(RoundedCornerShape(20.dp))
             .clickable(onClick = onClick)
             .testTag("hadith_book_${book.id}")
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -543,7 +566,7 @@ private fun HadithBookCard(
                 ) {
                     Surface(
                         shape = RoundedCornerShape(8.dp),
-                        color = MaterialTheme.colorScheme.surfaceContainerHigh
+                        color = MaterialTheme.colorScheme.surfaceContainerLow
                     ) {
                         Text(
                             text = book.category.displayName,
@@ -583,7 +606,7 @@ private fun HadithBookCard(
                         onClick = onDownloadOffline,
                         enabled = !isDownloading,
                         modifier = Modifier
-                            .size(40.dp)
+                            .size(44.dp)
                             .testTag("download_hadith_${book.id}")
                     ) {
                         if (isDownloading) {
@@ -606,20 +629,24 @@ private fun HadithBookCard(
 @Composable
 private fun HadithChapterCard(
     chapter: HadithChapter,
+    borderColor: Color,
     arabicFontFamily: androidx.compose.ui.text.font.FontFamily,
     onClick: () -> Unit
 ) {
-    ElevatedCard(
+    Surface(
         shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLowest,
+        border = BorderStroke(1.dp, borderColor),
         modifier = Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
             .clickable(onClick = onClick)
             .testTag("hadith_chapter_${chapter.id}")
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(14.dp),
+                .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
@@ -664,20 +691,23 @@ private fun HadithChapterCard(
 private fun HadithNarrationCard(
     hadith: HadithEntry,
     isBookmarked: Boolean,
+    borderColor: Color,
     onToggleBookmark: () -> Unit,
     onShare: () -> Unit
 ) {
     val reading = LocalReadingTypography.current
 
-    ElevatedCard(
+    Surface(
         shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLowest,
+        border = BorderStroke(1.dp, borderColor),
         modifier = Modifier
             .fillMaxWidth()
             .testTag("hadith_entry_${hadith.id}")
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            modifier = Modifier.padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -717,7 +747,7 @@ private fun HadithNarrationCard(
                     IconButton(
                         onClick = onToggleBookmark,
                         modifier = Modifier
-                            .size(40.dp)
+                            .size(44.dp)
                             .testTag("bookmark_hadith_${hadith.id}")
                     ) {
                         Icon(
@@ -729,7 +759,7 @@ private fun HadithNarrationCard(
                     }
                     IconButton(
                         onClick = onShare,
-                        modifier = Modifier.size(40.dp)
+                        modifier = Modifier.size(44.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Filled.Share,
@@ -745,7 +775,7 @@ private fun HadithNarrationCard(
                 Text(
                     text = hadith.arabicText,
                     fontFamily = reading.arabicFontFamily,
-                    fontSize = (reading.arabicFontSizeSp * 0.9f).coerceAtLeast(18f).sp,
+                    fontSize = (reading.arabicFontSizeSp * 0.9f).coerceAtLeast(20f).sp,
                     lineHeight = (reading.arabicFontSizeSp * 1.55f).sp,
                     textAlign = TextAlign.End,
                     color = MaterialTheme.colorScheme.onSurface,
@@ -757,7 +787,7 @@ private fun HadithNarrationCard(
                 Text(
                     text = hadith.narrator,
                     fontFamily = reading.englishFontFamily,
-                    fontSize = (reading.englishFontSizeSp - 1f).coerceAtLeast(12f).sp,
+                    fontSize = (reading.englishFontSizeSp - 0.5f).coerceAtLeast(13f).sp,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.primary
                 )
@@ -768,7 +798,7 @@ private fun HadithNarrationCard(
                     text = hadith.englishText,
                     fontFamily = reading.englishFontFamily,
                     fontSize = reading.englishFontSizeSp.sp,
-                    lineHeight = (reading.englishFontSizeSp * 1.48f).sp,
+                    lineHeight = (reading.englishFontSizeSp * 1.5f).sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }

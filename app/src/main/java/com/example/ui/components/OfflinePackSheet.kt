@@ -15,12 +15,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.MenuBook
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.AutoStories
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Map
+import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -39,6 +41,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import com.example.domain.QuranReciterOption
 import com.example.domain.QuranTranslationOption
 import java.util.Locale
 
@@ -54,16 +57,30 @@ fun OfflinePackSheet(
     selectedTranslation: QuranTranslationOption,
     isDownloadingQuran: Boolean,
     quranProgress: Int,
+    selectedReciter: QuranReciterOption,
+    cachedAudioSurahsCount: Int,
+    essentialAudioReadyCount: Int,
+    essentialAudioTotalCount: Int,
+    audioCacheBytes: Long,
+    isDownloadingEssentialAudio: Boolean,
+    essentialAudioProgressText: String?,
+    essentialAudioProgressFraction: Float,
     offlineHadithBooksCount: Int,
     isDownloadingHadithPack: Boolean,
+    cachedAdhanCount: Int,
+    totalAdhanCount: Int,
+    isDownloadingAdhan: Boolean,
     onSaveAreaOffline: () -> Unit,
     onDownloadAllQuran: () -> Unit,
+    onDownloadEssentialAudio: () -> Unit,
     onDownloadEssentialHadith: () -> Unit,
+    onDownloadAdhanAudio: () -> Unit,
     onClearCaches: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val mbText = String.format(Locale.US, "%.1f MB", offlineStorageBytes / (1024.0 * 1024.0))
+    val audioMbText = String.format(Locale.US, "%.1f MB", audioCacheBytes / (1024.0 * 1024.0))
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -95,7 +112,7 @@ fun OfflinePackSheet(
                         text = if (isOnline) {
                             "Online · Download packs now for 100% offline use"
                         } else {
-                            "Offline · Using on-device prayers, maps & downloaded books"
+                            "Offline · Prayers, Qibla, saved maps, audio & books ready"
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = if (isOnline) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
@@ -131,7 +148,7 @@ fun OfflinePackSheet(
                             tint = MaterialTheme.colorScheme.onSecondaryContainer
                         )
                         Text(
-                            text = "You are offline. Prayer times, countdowns, Qibla, saved masjids, cached map tiles, and downloaded Qur'an & Hadith work offline automatically.",
+                            text = "You are offline. Prayer times, countdowns, Qibla, Tasbeeh, Zakat, saved masjids, cached map tiles, and downloaded Qur'an text/audio & Hadith work offline automatically.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSecondaryContainer
                         )
@@ -165,7 +182,7 @@ fun OfflinePackSheet(
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = "$savedMasjidsCount masjids saved · Zoom 12–15 street map tiles",
+                                text = "$savedMasjidsCount masjids saved · Zoom 12–16 street map tiles",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -205,7 +222,7 @@ fun OfflinePackSheet(
                 }
             }
 
-            // 2. Complete Qur'an Offline (114 Surahs)
+            // 2. Complete Qur'an Text Offline (114 Surahs)
             Surface(
                 shape = RoundedCornerShape(18.dp),
                 color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -279,7 +296,86 @@ fun OfflinePackSheet(
                 }
             }
 
-            // 3. Hadith Offline Packs
+            // 3. Qur'an Audio Recitations Offline
+            Surface(
+                shape = RoundedCornerShape(18.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.VolumeUp,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Qur'an Recitations (${selectedReciter.shortLabel})",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "$cachedAudioSurahsCount / 114 full Surahs · $audioMbText total audio",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (essentialAudioReadyCount >= essentialAudioTotalCount) {
+                            Icon(
+                                imageVector = Icons.Filled.CheckCircle,
+                                contentDescription = "Essential audio saved offline",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+
+                    if (isDownloadingEssentialAudio) {
+                        LinearProgressIndicator(
+                            progress = { essentialAudioProgressFraction.coerceIn(0f, 1f) },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        if (essentialAudioProgressText != null) {
+                            Text(
+                                text = essentialAudioProgressText,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+
+                    FilledTonalButton(
+                        onClick = onDownloadEssentialAudio,
+                        enabled = isOnline && !isDownloadingEssentialAudio && essentialAudioReadyCount < essentialAudioTotalCount,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("offline_download_quran_audio_button")
+                    ) {
+                        Icon(Icons.Filled.CloudDownload, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            when {
+                                essentialAudioReadyCount >= essentialAudioTotalCount ->
+                                    "Daily Surahs & Juz 'Amma Audio Ready"
+                                isDownloadingEssentialAudio ->
+                                    "Downloading Audio Pack…"
+                                else ->
+                                    "Save Daily Surahs & Juz 'Amma ($essentialAudioReadyCount/$essentialAudioTotalCount)"
+                            }
+                        )
+                    }
+                }
+            }
+
+            // 4. Hadith Offline Packs
             Surface(
                 shape = RoundedCornerShape(18.dp),
                 color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -332,6 +428,71 @@ fun OfflinePackSheet(
                                 "Downloading Essential Books…"
                             } else {
                                 "Download 6 Essential Hadith Books"
+                            }
+                        )
+                    }
+                }
+            }
+
+            // 5. Adhan Alert Audio Offline
+            Surface(
+                shape = RoundedCornerShape(18.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.NotificationsActive,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Adhan Prayer Alerts",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "$cachedAdhanCount / $totalAdhanCount Adhan recordings saved for offline alarms",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (cachedAdhanCount >= totalAdhanCount && totalAdhanCount > 0) {
+                            Icon(
+                                imageVector = Icons.Filled.CheckCircle,
+                                contentDescription = "All Adhan recordings saved offline",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+
+                    FilledTonalButton(
+                        onClick = onDownloadAdhanAudio,
+                        enabled = isOnline && !isDownloadingAdhan && cachedAdhanCount < totalAdhanCount,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("offline_download_adhan_button")
+                    ) {
+                        Icon(Icons.Filled.CloudDownload, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            when {
+                                cachedAdhanCount >= totalAdhanCount && totalAdhanCount > 0 ->
+                                    "All Adhan Alerts Saved Offline"
+                                isDownloadingAdhan ->
+                                    "Downloading Adhan Alerts…"
+                                else ->
+                                    "Save All Adhan Alerts Offline"
                             }
                         )
                     }

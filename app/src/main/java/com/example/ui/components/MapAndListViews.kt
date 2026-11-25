@@ -8,6 +8,7 @@ import android.graphics.drawable.Drawable
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -84,7 +85,12 @@ import com.example.domain.LatLngPoint
 import com.example.domain.Masjid
 import com.example.domain.RouteInfo
 import com.example.domain.TravelMode
+import com.example.ui.theme.LocalReadingTypography
 import org.osmdroid.config.Configuration
+import org.osmdroid.events.DelayedMapListener
+import org.osmdroid.events.MapListener
+import org.osmdroid.events.ScrollEvent
+import org.osmdroid.events.ZoomEvent
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
@@ -106,11 +112,13 @@ fun MasjidOpenStreetMap(
     activeRoute: RouteInfo?,
     recenterTick: Int,
     onSelectMasjid: (Masjid) -> Unit,
+    onViewportMoved: (LatLngPoint) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val currentOnSelect by rememberUpdatedState(onSelectMasjid)
+    val currentOnViewportMoved by rememberUpdatedState(onViewportMoved)
 
     // Configure OSMDroid safely for Android 14 (One UI 6.1) Scoped Storage before MapView creation
     val mapView = remember(context) {
@@ -129,6 +137,24 @@ fun MasjidOpenStreetMap(
             val start = mapCenter ?: userLocation ?: LatLngPoint(21.4225, 39.8262)
             controller.setZoom(14.0)
             controller.setCenter(GeoPoint(start.latitude, start.longitude))
+            addMapListener(
+                DelayedMapListener(
+                    object : MapListener {
+                        override fun onScroll(event: ScrollEvent?): Boolean {
+                            val c = event?.source?.mapCenter ?: this@apply.mapCenter
+                            currentOnViewportMoved(LatLngPoint(c.latitude, c.longitude))
+                            return false
+                        }
+
+                        override fun onZoom(event: ZoomEvent?): Boolean {
+                            val c = event?.source?.mapCenter ?: this@apply.mapCenter
+                            currentOnViewportMoved(LatLngPoint(c.latitude, c.longitude))
+                            return false
+                        }
+                    },
+                    250L
+                )
+            )
         }
     }
 
@@ -322,21 +348,28 @@ fun SelectedMasjidCard(
     onStartExternalNav: (Masjid) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val reading = LocalReadingTypography.current
+    val borderColor = MaterialTheme.colorScheme.outlineVariant.copy(
+        alpha = if (reading.highContrastLargePrint) 0.9f else 0.6f
+    )
     val schedule = masjid.prayerSchedule
     val effectiveMetrics = roadMetrics?.takeIf { it.travelMode == travelMode }
         ?: GeoFormatters.fallbackRoadMetrics(masjid.distanceMeters, travelMode)
     val estimatedMins = (effectiveMetrics.durationSeconds / 60.0).let { kotlin.math.round(it).toInt().coerceAtLeast(1) }
     val arriveBeforeNext = schedule.nextPrayer != null && estimatedMins < schedule.minutesUntilNext
 
-    ElevatedCard(
-        shape = RoundedCornerShape(24.dp),
+    Surface(
+        shape = RoundedCornerShape(22.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLowest,
+        border = BorderStroke(1.dp, borderColor),
+        shadowElevation = 2.dp,
         modifier = modifier
             .fillMaxWidth()
             .widthIn(max = 560.dp)
             .testTag("selected_masjid_card")
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier.padding(18.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Row(
@@ -385,6 +418,8 @@ fun SelectedMasjidCard(
                     )
                 }
             }
+
+            MasjidAmenityBadges(masjid = masjid)
 
             Row(
                 modifier = Modifier
@@ -530,15 +565,22 @@ fun ActiveRouteCard(
     onClearRoute: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    ElevatedCard(
-        shape = RoundedCornerShape(24.dp),
+    val reading = LocalReadingTypography.current
+    val borderColor = MaterialTheme.colorScheme.outlineVariant.copy(
+        alpha = if (reading.highContrastLargePrint) 0.9f else 0.6f
+    )
+    Surface(
+        shape = RoundedCornerShape(22.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLowest,
+        border = BorderStroke(1.dp, borderColor),
+        shadowElevation = 2.dp,
         modifier = modifier
             .fillMaxWidth()
             .widthIn(max = 560.dp)
             .testTag("active_route_card")
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier.padding(18.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Row(
@@ -791,14 +833,18 @@ fun MasjidListView(
         return
     }
 
+    val reading = LocalReadingTypography.current
+    val borderColor = MaterialTheme.colorScheme.outlineVariant.copy(
+        alpha = if (reading.highContrastLargePrint) 0.9f else 0.55f
+    )
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
             .testTag("masjid_list"),
         contentPadding = PaddingValues(
-            start = 16.dp,
-            end = 16.dp,
-            top = 8.dp,
+            start = 20.dp,
+            end = 20.dp,
+            top = 10.dp,
             bottom = 24.dp
         ),
         verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -814,26 +860,29 @@ fun MasjidListView(
                 "~${GeoFormatters.formatDuration(metrics.durationSeconds)}"
             }
 
-            ElevatedCard(
+            Surface(
                 shape = RoundedCornerShape(20.dp),
+                color = if (isSelected) {
+                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.22f)
+                } else {
+                    MaterialTheme.colorScheme.surfaceContainerLowest
+                },
+                border = BorderStroke(
+                    width = if (isSelected) 1.5.dp else 1.dp,
+                    color = if (isSelected) MaterialTheme.colorScheme.primary else borderColor
+                ),
                 modifier = Modifier
                     .fillMaxWidth()
                     .widthIn(max = 600.dp)
+                    .clip(RoundedCornerShape(20.dp))
                     .clickable { onSelectOnMap(masjid) }
                     .testTag("masjid_card_${masjid.id}")
             ) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(
-                            if (isSelected) {
-                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f)
-                            } else {
-                                Color.Transparent
-                            }
-                        )
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                        .padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -894,6 +943,8 @@ fun MasjidListView(
                             )
                         }
                     }
+
+                    MasjidAmenityBadges(masjid = masjid)
 
                     if (next != null) {
                         Surface(
@@ -959,6 +1010,34 @@ fun MasjidListView(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MasjidAmenityBadges(masjid: Masjid) {
+    val badges = buildList {
+        if (masjid.wheelchairAccessible == true) add("Wheelchair")
+        if (masjid.hasParking == true) add("Parking")
+        if (masjid.hasWomenSection == true) add("Women's Area")
+    }
+    if (badges.isEmpty()) return
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        badges.forEach { label ->
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f)
+            ) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                )
             }
         }
     }

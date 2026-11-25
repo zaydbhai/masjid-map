@@ -1,6 +1,8 @@
 package com.example.ui
 
 import android.Manifest
+import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.BackHandler
@@ -22,6 +24,7 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Mosque
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -32,6 +35,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -43,15 +47,23 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.data.QuranAudioPlayer
+import com.example.domain.JumuahTimes
 import com.example.domain.LatLngPoint
+import com.example.domain.Masjid
+import com.example.domain.PrayerAlertSound
+import com.example.domain.PrayerName
 import com.example.domain.PrayerTimeCalculator
 import com.example.ui.components.AdhkarTasbeehSheet
+import com.example.ui.components.DuasAndGuidesSheet
 import com.example.ui.components.HijriCalendarDialog
 import com.example.ui.components.OfflinePackSheet
 import com.example.ui.components.PrayerTimesSheet
 import com.example.ui.components.QiblaCompassSheet
 import com.example.ui.components.SettingsSheet
 import com.example.ui.components.WidgetCustomizerSheet
+import com.example.ui.components.WorshipAndRamadanSheet
+import com.example.ui.components.ZakatCalculatorSheet
 
 @Composable
 fun AppMainScreen(
@@ -129,9 +141,15 @@ fun AppMainScreen(
             state.showAdhkarSheet ||
             state.showHijriDialog ||
             state.showWidgetSheet ||
+            state.showWorshipSheet ||
+            state.showZakatSheet ||
+            state.showDuasSheet ||
             state.currentTab != MainTab.HOME
     ) {
         when {
+            state.showWorshipSheet -> masjidViewModel.closeWorshipSheet()
+            state.showZakatSheet -> masjidViewModel.closeZakatSheet()
+            state.showDuasSheet -> masjidViewModel.closeDuasSheet()
             state.showWidgetSheet -> masjidViewModel.closeWidgetSheet()
             state.showHijriDialog -> masjidViewModel.closeHijriDialog()
             state.showQiblaSheet -> masjidViewModel.closeQiblaSheet()
@@ -151,24 +169,33 @@ fun AppMainScreen(
             snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
             bottomBar = {
                 if (!useNavigationRail) {
-                    NavigationBar(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
-                    ) {
-                        MainTab.entries.forEach { tab ->
-                            val selected = state.currentTab == tab
-                            val icon = when (tab) {
-                                MainTab.HOME -> if (selected) Icons.Filled.Home else Icons.Outlined.Home
-                                MainTab.MASJIDS -> Icons.Outlined.Mosque
-                                MainTab.QURAN -> if (selected) Icons.AutoMirrored.Filled.MenuBook else Icons.AutoMirrored.Outlined.MenuBook
-                                MainTab.HADITH -> if (selected) Icons.Filled.AutoStories else Icons.Outlined.AutoStories
-                            }
-                            NavigationBarItem(
-                                selected = selected,
-                                onClick = { masjidViewModel.selectTab(tab) },
-                                icon = { Icon(imageVector = icon, contentDescription = tab.label) },
-                                label = { Text(tab.label) },
-                                modifier = Modifier.testTag("nav_tab_${tab.name.lowercase()}")
+                    androidx.compose.foundation.layout.Column {
+                        HorizontalDivider(
+                            thickness = 1.dp,
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(
+                                alpha = if (state.highContrastLargePrint) 0.9f else 0.45f
                             )
+                        )
+                        NavigationBar(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+                            tonalElevation = 0.dp
+                        ) {
+                            MainTab.entries.forEach { tab ->
+                                val selected = state.currentTab == tab
+                                val icon = when (tab) {
+                                    MainTab.HOME -> if (selected) Icons.Filled.Home else Icons.Outlined.Home
+                                    MainTab.MASJIDS -> Icons.Outlined.Mosque
+                                    MainTab.QURAN -> if (selected) Icons.AutoMirrored.Filled.MenuBook else Icons.AutoMirrored.Outlined.MenuBook
+                                    MainTab.HADITH -> if (selected) Icons.Filled.AutoStories else Icons.Outlined.AutoStories
+                                }
+                                NavigationBarItem(
+                                    selected = selected,
+                                    onClick = { masjidViewModel.selectTab(tab) },
+                                    icon = { Icon(imageVector = icon, contentDescription = tab.label) },
+                                    label = { Text(tab.label) },
+                                    modifier = Modifier.testTag("nav_tab_${tab.name.lowercase()}")
+                                )
+                            }
                         }
                     }
                 }
@@ -181,7 +208,7 @@ fun AppMainScreen(
             ) {
                 if (useNavigationRail) {
                     NavigationRail(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
                         modifier = Modifier.fillMaxHeight()
                     ) {
                         MainTab.entries.forEach { tab ->
@@ -201,6 +228,12 @@ fun AppMainScreen(
                             )
                         }
                     }
+                    VerticalDivider(
+                        thickness = 1.dp,
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(
+                            alpha = if (state.highContrastLargePrint) 0.9f else 0.45f
+                        )
+                    )
                 }
 
                 Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
@@ -214,6 +247,10 @@ fun AppMainScreen(
                             onOpenQibla = masjidViewModel::openQiblaSheet,
                             onOpenAdhkar = masjidViewModel::openAdhkarSheet,
                             onOpenHijriDialog = masjidViewModel::openHijriDialog,
+                            onOpenWorship = masjidViewModel::openWorshipSheet,
+                            onOpenZakat = masjidViewModel::openZakatSheet,
+                            onOpenDuas = masjidViewModel::openDuasSheet,
+                            onQuickCyclePrayer = masjidViewModel::cyclePrayerLogStatus,
                             onContinueQuran = { surah, ayah ->
                                 masjidViewModel.selectTab(MainTab.QURAN)
                                 quranViewModel.openSurah(surah, initialAyah = ayah)
@@ -253,16 +290,23 @@ fun AppMainScreen(
         }
     }
 
-    // Per-Masjid Prayer Times Modal Bottom Sheet (with Favorite + Custom Iqamah Times)
+    // Per-Masjid Prayer Times Modal Bottom Sheet (with Favorite + Custom Iqamah & Jumu'ah + Share)
     state.showPrayerSheetFor?.let { masjid ->
+        val masjidIqamah = state.iqamahByMasjid[masjid.id].orEmpty()
+        val masjidJumuah = state.jumuahByMasjid[masjid.id] ?: JumuahTimes()
         PrayerTimesSheet(
             masjid = masjid,
             travelMode = state.travelMode,
             isFavorite = state.favoriteMasjidIds.contains(masjid.id),
-            iqamahTimes = state.iqamahByMasjid[masjid.id].orEmpty(),
+            iqamahTimes = masjidIqamah,
+            jumuahTimes = masjidJumuah,
             onToggleFavorite = { masjidViewModel.toggleFavoriteMasjid(masjid.id) },
             onSaveIqamahTimes = { map -> masjidViewModel.saveIqamahTimes(masjid.id, map) },
+            onSaveJumuahTimes = { first, second -> masjidViewModel.saveJumuahTimes(masjid.id, first, second) },
             onClearIqamahTimes = { masjidViewModel.clearIqamahTimes(masjid.id) },
+            onShareMasjid = { target ->
+                shareMasjidDetails(context, target, masjidJumuah, masjidIqamah)
+            },
             onDismiss = masjidViewModel::closePrayerSheet,
             onShowRoute = { m -> masjidViewModel.requestRouteTo(m) },
             onStartExternalNav = { m -> launchExternalNavigation(context, m, state.travelMode) }
@@ -271,10 +315,26 @@ fun AppMainScreen(
 
     // Unified App, Theme, Notification & Reading Settings Bottom Sheet
     if (state.showSettingsSheet) {
+        val ensureNotifPermissionThen: (() -> Unit) -> Unit = { action ->
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                val granted = ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) == PackageManager.PERMISSION_GRANTED
+                if (granted) {
+                    action()
+                } else {
+                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+            } else {
+                action()
+            }
+        }
         SettingsSheet(
             selectedMethod = state.calculationMethod,
             selectedMadhab = state.asrMadhab,
             selectedThemeMode = state.themeMode,
+            highContrastLargePrint = state.highContrastLargePrint,
             selectedArabicFont = state.arabicFont,
             arabicFontSizeSp = state.arabicFontSizeSp,
             selectedEnglishFont = state.englishFont,
@@ -288,9 +348,17 @@ fun AppMainScreen(
             notifyIsha = state.notifyIsha,
             reminderLeadMinutes = state.reminderLeadMinutes,
             alertSound = state.alertSound,
+            fajrFadeInAlarmEnabled = state.fajrFadeInAlarmEnabled,
+            suhoorReminderEnabled = state.suhoorReminderEnabled,
+            suhoorLeadMinutes = state.suhoorLeadMinutes,
+            persistentCountdownNotification = state.persistentCountdownNotification,
+            autoDndAtPrayer = state.autoDndAtPrayer,
+            isDownloadingAdhan = state.isDownloadingAdhan,
+            cachedAdhanIds = state.cachedAdhanIds,
             onSelectMethod = masjidViewModel::updateCalculationMethod,
             onSelectMadhab = masjidViewModel::updateAsrMadhab,
             onSelectThemeMode = masjidViewModel::updateThemeMode,
+            onToggleHighContrastLargePrint = masjidViewModel::setHighContrastLargePrint,
             onSelectArabicFont = masjidViewModel::updateArabicFont,
             onSelectArabicFontSize = masjidViewModel::updateArabicFontSize,
             onSelectEnglishFont = masjidViewModel::updateEnglishFont,
@@ -300,7 +368,25 @@ fun AppMainScreen(
             onTogglePrayerNotify = masjidViewModel::togglePrayerNotification,
             onSelectLeadMinutes = masjidViewModel::setReminderLeadMinutes,
             onSelectAlertSound = masjidViewModel::setAlertSound,
-            onSendTestNotification = masjidViewModel::sendTestNotification,
+            onToggleFajrFadeIn = { enable ->
+                if (enable) ensureNotifPermissionThen { masjidViewModel.setFajrFadeInAlarmEnabled(true) }
+                else masjidViewModel.setFajrFadeInAlarmEnabled(false)
+            },
+            onToggleSuhoorReminder = { enable ->
+                if (enable) ensureNotifPermissionThen { masjidViewModel.setSuhoorReminderEnabled(true) }
+                else masjidViewModel.setSuhoorReminderEnabled(false)
+            },
+            onSelectSuhoorLead = masjidViewModel::setSuhoorLeadMinutes,
+            onTogglePersistentCountdown = { enable ->
+                if (enable) ensureNotifPermissionThen { masjidViewModel.setPersistentCountdownNotification(true) }
+                else masjidViewModel.setPersistentCountdownNotification(false)
+            },
+            onToggleAutoDnd = masjidViewModel::setAutoDndAtPrayer,
+            onPreviewAdhan = masjidViewModel::downloadAndPreviewAdhan,
+            onStopAdhan = masjidViewModel::stopAdhanPreview,
+            onSendTestNotification = {
+                masjidViewModel.sendTestNotification(state.fajrFadeInAlarmEnabled && state.notificationsEnabled)
+            },
             onOpenWidgetCustomizer = masjidViewModel::openWidgetSheet,
             onDismiss = masjidViewModel::closeSettingsSheet
         )
@@ -308,6 +394,10 @@ fun AppMainScreen(
 
     // Offline Library & Area Map Pack Sheet
     if (state.showOfflineSheet) {
+        val essentialSurahs = QuranAudioPlayer.ESSENTIAL_AUDIO_SURAH_NUMBERS
+        val essentialAudioReadyCount = quranState.cachedAudioSurahNumbers.count { essentialSurahs.contains(it) }
+        val totalAdhanCount = PrayerAlertSound.entries.count { it.isAdhanAudio }
+
         OfflinePackSheet(
             isOnline = state.isOnline,
             savedMasjidsCount = state.savedMasjidsCount,
@@ -318,11 +408,27 @@ fun AppMainScreen(
             selectedTranslation = quranState.selectedTranslation,
             isDownloadingQuran = quranState.isDownloadingAllOffline,
             quranProgress = quranState.offlineDownloadProgress,
+            selectedReciter = quranState.selectedReciter,
+            cachedAudioSurahsCount = quranState.cachedAudioSurahNumbers.size,
+            essentialAudioReadyCount = essentialAudioReadyCount,
+            essentialAudioTotalCount = essentialSurahs.size,
+            audioCacheBytes = quranState.audioCacheBytes,
+            isDownloadingEssentialAudio = quranState.isDownloadingEssentialAudio,
+            essentialAudioProgressText = quranState.essentialAudioProgressText,
+            essentialAudioProgressFraction = quranState.essentialAudioProgressFraction,
             offlineHadithBooksCount = hadithState.offlineReadyBookIds.size,
             isDownloadingHadithPack = hadithState.isDownloadingEssentialPack,
+            cachedAdhanCount = state.cachedAdhanIds.size,
+            totalAdhanCount = totalAdhanCount,
+            isDownloadingAdhan = state.isDownloadingAdhan,
             onSaveAreaOffline = masjidViewModel::saveCurrentAreaOffline,
             onDownloadAllQuran = {
                 quranViewModel.downloadCompleteQuranOffline(quranState.selectedTranslation) {
+                    masjidViewModel.refreshOfflineStats()
+                }
+            },
+            onDownloadEssentialAudio = {
+                quranViewModel.downloadEssentialAudioOffline {
                     masjidViewModel.refreshOfflineStats()
                 }
             },
@@ -331,6 +437,7 @@ fun AppMainScreen(
                     masjidViewModel.refreshOfflineStats()
                 }
             },
+            onDownloadAdhanAudio = masjidViewModel::downloadAllAdhanAudioOffline,
             onClearCaches = {
                 masjidViewModel.clearAllOfflineCaches()
                 quranViewModel.refreshCachedState()
@@ -407,6 +514,80 @@ fun AppMainScreen(
             onChangeCustomTitle = masjidViewModel::setWidgetCustomTitle,
             onDismiss = masjidViewModel::closeWidgetSheet
         )
+    }
+
+    // Worship, Fasting, Ramadan Night Windows & Khatam Planner Sheet
+    if (state.showWorshipSheet) {
+        val recentKeys = remember(state.worshipTrackerState) { masjidViewModel.recentWorshipDateKeys(14) }
+        WorshipAndRamadanSheet(
+            trackerState = state.worshipTrackerState,
+            nightWindows = state.nightWorshipWindows,
+            recentDateKeys = recentKeys,
+            suhoorReminderEnabled = state.suhoorReminderEnabled,
+            suhoorLeadMinutes = state.suhoorLeadMinutes,
+            onCyclePrayerStatus = masjidViewModel::cyclePrayerLogStatus,
+            onToggleFastedToday = masjidViewModel::toggleFastedToday,
+            onToggleSuhoorReminder = { enable ->
+                if (enable && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                ) {
+                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                } else {
+                    masjidViewModel.setSuhoorReminderEnabled(enable)
+                }
+            },
+            onSelectSuhoorLead = masjidViewModel::setSuhoorLeadMinutes,
+            onSetKhatamGoalDays = masjidViewModel::setKhatamGoalDays,
+            onAddKhatamPages = masjidViewModel::addKhatamPages,
+            onResetKhatam = masjidViewModel::resetKhatamProgress,
+            onDismiss = masjidViewModel::closeWorshipSheet
+        )
+    }
+
+    // Offline Zakat, Zakat al-Fitr & Fidyah Calculator Sheet
+    if (state.showZakatSheet) {
+        ZakatCalculatorSheet(
+            initialCurrency = state.worshipTrackerState.zakatCurrency,
+            initialNisab = state.worshipTrackerState.zakatNisabStandard,
+            onSavePreferences = masjidViewModel::saveZakatPreferences,
+            onDismiss = masjidViewModel::closeZakatSheet
+        )
+    }
+
+    // Searchable Situational Sunnah Duas & Practical Wudu/Salah/Umrah Guides Sheet
+    if (state.showDuasSheet) {
+        DuasAndGuidesSheet(onDismiss = masjidViewModel::closeDuasSheet)
+    }
+}
+
+private fun shareMasjidDetails(
+    context: Context,
+    masjid: Masjid,
+    jumuah: JumuahTimes,
+    iqamah: Map<PrayerName, String>
+) {
+    val text = buildString {
+        appendLine(masjid.name)
+        appendLine(masjid.address)
+        appendLine("Map: https://www.openstreetmap.org/?mlat=${masjid.location.latitude}&mlon=${masjid.location.longitude}#map=17/${masjid.location.latitude}/${masjid.location.longitude}")
+        if (jumuah.isConfigured) {
+            appendLine("Jumu'ah Khutbah: ${jumuah.summaryText()}")
+        }
+        if (iqamah.isNotEmpty()) {
+            appendLine("Iqamah Times:")
+            iqamah.forEach { (prayer, time) ->
+                if (time.isNotBlank()) {
+                    appendLine("- ${prayer.displayName}: $time")
+                }
+            }
+        }
+    }
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_TEXT, text.trim())
+    }
+    runCatching {
+        context.startActivity(Intent.createChooser(intent, "Share Masjid Details"))
     }
 }
 

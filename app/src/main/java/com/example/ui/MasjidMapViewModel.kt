@@ -4,6 +4,8 @@ import android.app.Application
 import androidx.glance.appwidget.updateAll
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.audio.QuranPlaybackController
+import com.example.data.AdhanAudioPlayer
 import com.example.data.BookmarksAndMasjidExtrasRepository
 import com.example.data.HadithRepository
 import com.example.data.LocationProvider
@@ -12,15 +14,21 @@ import com.example.data.NetworkMonitor
 import com.example.data.OfflineMapTileCache
 import com.example.data.QuranRepository
 import com.example.data.UserPreferencesRepository
+import com.example.data.WorshipTrackerRepository
+import com.example.data.WorshipTrackerState
 import com.example.domain.AppThemeMode
 import com.example.domain.ArabicFontOption
 import com.example.domain.AsrMadhab
 import com.example.domain.CalculationMethod
+import com.example.domain.CurrencyPreset
 import com.example.domain.EnglishFontOption
 import com.example.domain.HadithCatalog
 import com.example.domain.HadithEntry
+import com.example.domain.JumuahTimes
 import com.example.domain.LatLngPoint
 import com.example.domain.Masjid
+import com.example.domain.NightWorshipWindows
+import com.example.domain.NisabStandard
 import com.example.domain.PrayerAlertSound
 import com.example.domain.PrayerName
 import com.example.domain.PrayerSchedule
@@ -60,7 +68,10 @@ data class MasjidMapUiState(
     val userLocation: LatLngPoint? = null,
     val searchReferenceLocation: LatLngPoint? = null,
     val mapCenter: LatLngPoint? = null,
+    val viewportCenter: LatLngPoint? = null,
     val homePrayerSchedule: PrayerSchedule = PrayerTimeCalculator.calculateSchedule(21.4225, 39.8262),
+    val nightWorshipWindows: NightWorshipWindows = PrayerTimeCalculator.calculateNightWorshipWindows(21.4225, 39.8262),
+    val worshipTrackerState: WorshipTrackerState = WorshipTrackerState(),
     val homeLocationLabel: String = "Default (Enable GPS for local times)",
     val hadithOfTheDay: HadithEntry = HadithCatalog.authenticDailySeeds.first(),
     val masjids: List<Masjid> = emptyList(),
@@ -84,7 +95,9 @@ data class MasjidMapUiState(
     val lastReadAyah: Int = 1,
     val favoriteMasjidIds: Set<String> = emptySet(),
     val showOnlyFavoriteMasjids: Boolean = false,
+    val showOnlyWheelchairMasjids: Boolean = false,
     val iqamahByMasjid: Map<String, Map<PrayerName, String>> = emptyMap(),
+    val jumuahByMasjid: Map<String, JumuahTimes> = emptyMap(),
     val hadithBookmarks: List<HadithEntry> = emptyList(),
     val notificationsEnabled: Boolean = false,
     val notifyFajr: Boolean = true,
@@ -94,6 +107,14 @@ data class MasjidMapUiState(
     val notifyIsha: Boolean = true,
     val reminderLeadMinutes: Int = 0,
     val alertSound: PrayerAlertSound = PrayerAlertSound.DEFAULT_CHIME,
+    val suhoorReminderEnabled: Boolean = false,
+    val suhoorLeadMinutes: Int = 30,
+    val persistentCountdownNotification: Boolean = false,
+    val autoDndAtPrayer: Boolean = false,
+    val highContrastLargePrint: Boolean = false,
+    val fajrFadeInAlarmEnabled: Boolean = false,
+    val isDownloadingAdhan: Boolean = false,
+    val cachedAdhanIds: Set<String> = emptySet(),
     val tasbeehPresetId: String = "subhanallah",
     val tasbeehCount: Int = 0,
     val tasbeehTarget: Int = 33,
@@ -118,6 +139,9 @@ data class MasjidMapUiState(
     val showAdhkarSheet: Boolean = false,
     val showHijriDialog: Boolean = false,
     val showWidgetSheet: Boolean = false,
+    val showWorshipSheet: Boolean = false,
+    val showZakatSheet: Boolean = false,
+    val showDuasSheet: Boolean = false,
     val isSavingAreaOffline: Boolean = false,
     val areaTileProgressText: String? = null,
     val savedMasjidsCount: Int = 0,
@@ -137,13 +161,18 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
     private val networkMonitor = NetworkMonitor(application)
     private val prefs = UserPreferencesRepository(application)
     private val extrasRepo = BookmarksAndMasjidExtrasRepository.getInstance(application)
+    private val worshipTrackerRepo = WorshipTrackerRepository.getInstance(application)
 
     private var restoredSavedLocation = false
 
     private val _uiState = MutableStateFlow(
         MasjidMapUiState(
             isOnline = networkMonitor.isCurrentlyOnline(),
-            hasLocationPermission = locationProvider.hasLocationPermission()
+            hasLocationPermission = locationProvider.hasLocationPermission(),
+            cachedAdhanIds = PrayerAlertSound.entries
+                .filter { it.isAdhanAudio && AdhanAudioPlayer.isCached(appContext, it) }
+                .map { it.id }
+                .toSet()
         )
     )
     val uiState: StateFlow<MasjidMapUiState> = _uiState.asStateFlow()
@@ -167,6 +196,18 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             extrasRepo.iqamahByMasjid.collect { iqamah ->
                 _uiState.update { it.copy(iqamahByMasjid = iqamah) }
+            }
+        }
+
+        viewModelScope.launch {
+            extrasRepo.jumuahByMasjid.collect { jumuah ->
+                _uiState.update { it.copy(jumuahByMasjid = jumuah) }
+            }
+        }
+
+        viewModelScope.launch {
+            worshipTrackerRepo.state.collect { tracker ->
+                _uiState.update { it.copy(worshipTrackerState = tracker) }
             }
         }
 
@@ -215,6 +256,20 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
                     else -> current.masjids
                 }
 
+                val updatedRoadMetrics = if (
+                    savedLoc != null &&
+                    current.roadMetricsByMasjidId.isEmpty() &&
+                    updatedMasjids.isNotEmpty()
+                ) {
+                    repository.loadOfflineRoadMetricsNow(
+                        origin = savedLoc,
+                        masjids = updatedMasjids,
+                        travelMode = settings.travelMode
+                    )
+                } else {
+                    current.roadMetricsByMasjidId
+                }
+
                 val updatedSelected = current.selectedMasjid?.let { sel ->
                     updatedMasjids.firstOrNull { it.id == sel.id } ?: sel
                 } ?: updatedMasjids.firstOrNull()
@@ -222,10 +277,18 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
                     updatedMasjids.firstOrNull { it.id == sheetMasjid.id } ?: sheetMasjid
                 }
                 val refPoint = effectiveUserLoc ?: effectiveCenter ?: LatLngPoint(21.4225, 39.8262)
+                val now = System.currentTimeMillis()
                 val updatedHomeSchedule = PrayerTimeCalculator.calculateSchedule(
                     latitude = refPoint.latitude,
                     longitude = refPoint.longitude,
-                    nowMillis = System.currentTimeMillis(),
+                    nowMillis = now,
+                    method = settings.calculationMethod,
+                    madhab = settings.asrMadhab
+                )
+                val updatedNightWindows = PrayerTimeCalculator.calculateNightWorshipWindows(
+                    latitude = refPoint.latitude,
+                    longitude = refPoint.longitude,
+                    nowMillis = now,
                     method = settings.calculationMethod,
                     madhab = settings.asrMadhab
                 )
@@ -254,6 +317,12 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
                         notifyIsha = settings.notifyIsha,
                         reminderLeadMinutes = settings.reminderLeadMinutes,
                         alertSound = settings.alertSound,
+                        suhoorReminderEnabled = settings.suhoorReminderEnabled,
+                        suhoorLeadMinutes = settings.suhoorLeadMinutes,
+                        persistentCountdownNotification = settings.persistentCountdownNotification,
+                        autoDndAtPrayer = settings.autoDndAtPrayer,
+                        highContrastLargePrint = settings.highContrastLargePrint,
+                        fajrFadeInAlarmEnabled = settings.fajrFadeInAlarmEnabled,
                         tasbeehPresetId = settings.tasbeehPresetId,
                         tasbeehCount = settings.tasbeehCount,
                         tasbeehTarget = settings.tasbeehTarget,
@@ -270,9 +339,11 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
                         widgetQuickTiles = settings.widgetQuickTiles,
                         widgetCustomTitle = settings.widgetCustomTitle,
                         masjids = updatedMasjids,
+                        roadMetricsByMasjidId = updatedRoadMetrics,
                         selectedMasjid = updatedSelected,
                         showPrayerSheetFor = updatedSheet,
-                        homePrayerSchedule = updatedHomeSchedule
+                        homePrayerSchedule = updatedHomeSchedule,
+                        nightWorshipWindows = updatedNightWindows
                     )
                 }
 
@@ -281,19 +352,32 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
             }
         }
 
-        // Live 1-second ticker for accurate countdown on Home tab (100% offline math)
+        // Live 1-second ticker for accurate countdown on Home tab & night windows (100% offline math)
         viewModelScope.launch {
             while (true) {
                 val state = _uiState.value
                 val ref = state.userLocation ?: state.mapCenter ?: LatLngPoint(21.4225, 39.8262)
+                val now = System.currentTimeMillis()
                 val schedule = PrayerTimeCalculator.calculateSchedule(
                     latitude = ref.latitude,
                     longitude = ref.longitude,
-                    nowMillis = System.currentTimeMillis(),
+                    nowMillis = now,
                     method = state.calculationMethod,
                     madhab = state.asrMadhab
                 )
-                _uiState.update { it.copy(homePrayerSchedule = schedule) }
+                val windows = PrayerTimeCalculator.calculateNightWorshipWindows(
+                    latitude = ref.latitude,
+                    longitude = ref.longitude,
+                    nowMillis = now,
+                    method = state.calculationMethod,
+                    madhab = state.asrMadhab
+                )
+                _uiState.update {
+                    it.copy(
+                        homePrayerSchedule = schedule,
+                        nightWorshipWindows = windows
+                    )
+                }
                 delay(1_000L)
             }
         }
@@ -326,6 +410,50 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
     fun loadCurrentLocationAndMasjids() {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoadingMasjids = true, errorMessage = null) }
+
+            // Seed cached fix & locally saved masjids in <50ms while fresh GPS resolves
+            val currentBeforeFix = _uiState.value
+            if (currentBeforeFix.userLocation == null) {
+                val fastLoc = locationProvider.getFastCachedLocation()
+                if (fastLoc != null) {
+                    val quickSchedule = PrayerTimeCalculator.calculateSchedule(
+                        latitude = fastLoc.latitude,
+                        longitude = fastLoc.longitude,
+                        method = currentBeforeFix.calculationMethod,
+                        madhab = currentBeforeFix.asrMadhab
+                    )
+                    val quickMasjids = if (currentBeforeFix.masjids.isEmpty()) {
+                        repository.loadOfflineMasjidsNow(
+                            center = fastLoc,
+                            referenceForDistance = fastLoc,
+                            method = currentBeforeFix.calculationMethod,
+                            madhab = currentBeforeFix.asrMadhab
+                        )
+                    } else {
+                        repository.recalculateDistances(currentBeforeFix.masjids, fastLoc)
+                    }
+                    val quickMetrics = repository.loadOfflineRoadMetricsNow(
+                        origin = fastLoc,
+                        masjids = quickMasjids,
+                        travelMode = currentBeforeFix.travelMode
+                    )
+                    _uiState.update {
+                        it.copy(
+                            userLocation = fastLoc,
+                            searchReferenceLocation = fastLoc,
+                            mapCenter = fastLoc,
+                            viewportCenter = fastLoc,
+                            homePrayerSchedule = quickSchedule,
+                            homeLocationLabel = "Your Current Location",
+                            masjids = quickMasjids,
+                            roadMetricsByMasjidId = quickMetrics,
+                            selectedMasjid = it.selectedMasjid ?: quickMasjids.firstOrNull(),
+                            recenterTick = it.recenterTick + 1
+                        )
+                    }
+                }
+            }
+
             val loc = locationProvider.getCurrentOrLastLocation()
             if (loc == null) {
                 val fallback = _uiState.value.userLocation ?: _uiState.value.mapCenter
@@ -335,7 +463,7 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
                     _uiState.update {
                         it.copy(
                             isLoadingMasjids = false,
-                            errorMessage = "Unable to read GPS location. Try searching a saved area."
+                            errorMessage = "Unable to read GPS location. Check device GPS or search a city above."
                         )
                     }
                 }
@@ -353,20 +481,47 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
             } else {
                 current.masjids
             }
+            val offlineMetrics = repository.loadOfflineRoadMetricsNow(
+                origin = loc,
+                masjids = recalculatedExisting,
+                travelMode = current.travelMode
+            )
             prefs.setLastLocation(loc, "Your Current Location")
             _uiState.update {
                 it.copy(
                     userLocation = loc,
                     searchReferenceLocation = loc,
                     mapCenter = loc,
+                    viewportCenter = loc,
                     homePrayerSchedule = homeSchedule,
                     homeLocationLabel = "Your Current Location",
                     masjids = recalculatedExisting,
-                    roadMetricsByMasjidId = emptyMap(),
+                    roadMetricsByMasjidId = offlineMetrics,
                     recenterTick = it.recenterTick + 1
                 )
             }
             fetchNearbyAt(center = loc, reference = loc)
+        }
+    }
+
+    fun onMapViewportChanged(center: LatLngPoint) {
+        _uiState.update { it.copy(viewportCenter = center) }
+    }
+
+    fun searchThisArea() {
+        val target = _uiState.value.viewportCenter ?: _uiState.value.mapCenter ?: return
+        val ref = _uiState.value.userLocation ?: target
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    isLoadingMasjids = true,
+                    mapCenter = target,
+                    searchReferenceLocation = target,
+                    errorMessage = null,
+                    offlineNotice = null
+                )
+            }
+            fetchNearbyAt(center = target, reference = ref)
         }
     }
 
@@ -376,6 +531,7 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
             _uiState.update {
                 it.copy(
                     mapCenter = loc,
+                    viewportCenter = loc,
                     searchReferenceLocation = loc,
                     recenterTick = it.recenterTick + 1
                 )
@@ -453,14 +609,20 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
                 } else {
                     _uiState.value.homeLocationLabel
                 }
+                val cachedMetrics = repository.loadOfflineRoadMetricsNow(
+                    origin = reference,
+                    masjids = result.masjids,
+                    travelMode = state.travelMode
+                )
                 _uiState.update {
                     it.copy(
                         isLoadingMasjids = false,
                         mapCenter = firstLoc,
+                        viewportCenter = firstLoc,
                         searchReferenceLocation = reference,
                         homeLocationLabel = updatedHomeLabel,
                         masjids = result.masjids,
-                        roadMetricsByMasjidId = emptyMap(),
+                        roadMetricsByMasjidId = cachedMetrics,
                         selectedMasjid = result.masjids.firstOrNull(),
                         offlineNotice = result.notice,
                         recenterTick = it.recenterTick + 1,
@@ -509,12 +671,17 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
                 madhab = state.asrMadhab,
                 radiusMeters = state.searchRadiusKm * 1000.0
             )
+            val cachedMetrics = repository.loadOfflineRoadMetricsNow(
+                origin = reference,
+                masjids = result.masjids,
+                travelMode = state.travelMode
+            )
             _uiState.update {
                 it.copy(
                     isLoadingMasjids = false,
-                    searchReferenceLocation = reference,
+                    searchReferenceLocation = center,
                     masjids = result.masjids,
-                    roadMetricsByMasjidId = emptyMap(),
+                    roadMetricsByMasjidId = cachedMetrics,
                     selectedMasjid = result.masjids.firstOrNull(),
                     offlineNotice = result.notice,
                     errorMessage = if (result.masjids.isEmpty()) {
@@ -757,6 +924,123 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
         _uiState.update { it.copy(showWidgetSheet = false) }
     }
 
+    fun openWorshipSheet() {
+        _uiState.update { it.copy(showWorshipSheet = true) }
+    }
+
+    fun closeWorshipSheet() {
+        _uiState.update { it.copy(showWorshipSheet = false) }
+    }
+
+    fun openZakatSheet() {
+        _uiState.update { it.copy(showZakatSheet = true) }
+    }
+
+    fun closeZakatSheet() {
+        _uiState.update { it.copy(showZakatSheet = false) }
+    }
+
+    fun openDuasSheet() {
+        _uiState.update { it.copy(showDuasSheet = true) }
+    }
+
+    fun closeDuasSheet() {
+        _uiState.update { it.copy(showDuasSheet = false) }
+    }
+
+    fun toggleWheelchairFilter() {
+        _uiState.update { it.copy(showOnlyWheelchairMasjids = !it.showOnlyWheelchairMasjids) }
+    }
+
+    fun saveJumuahTimes(masjidId: String, firstKhutbah: String, secondKhutbah: String) {
+        extrasRepo.setJumuahTimes(masjidId, firstKhutbah, secondKhutbah)
+        _uiState.update { it.copy(errorMessage = "Jumu'ah Khutbah times saved offline.") }
+    }
+
+    fun cyclePrayerLogStatus(prayer: PrayerName) {
+        worshipTrackerRepo.cyclePrayerStatus(prayer)
+    }
+
+    fun toggleFastedToday() {
+        worshipTrackerRepo.toggleFastedToday()
+    }
+
+    fun recentWorshipDateKeys(days: Int = 14): List<String> =
+        worshipTrackerRepo.recentDateKeys(days)
+
+    fun setKhatamGoalDays(days: Int) {
+        worshipTrackerRepo.setKhatamGoalDays(days)
+    }
+
+    fun addKhatamPages(delta: Int) {
+        worshipTrackerRepo.addKhatamPages(delta)
+    }
+
+    fun resetKhatamProgress() {
+        worshipTrackerRepo.resetKhatamProgress()
+    }
+
+    fun saveZakatPreferences(currency: CurrencyPreset, nisab: NisabStandard) {
+        worshipTrackerRepo.saveZakatPreferences(currency, nisab)
+    }
+
+    fun setSuhoorReminderEnabled(enabled: Boolean) {
+        viewModelScope.launch { prefs.setSuhoorReminderEnabled(enabled) }
+    }
+
+    fun setSuhoorLeadMinutes(minutes: Int) {
+        viewModelScope.launch { prefs.setSuhoorLeadMinutes(minutes) }
+    }
+
+    fun setPersistentCountdownNotification(enabled: Boolean) {
+        viewModelScope.launch { prefs.setPersistentCountdownNotification(enabled) }
+    }
+
+    fun setAutoDndAtPrayer(enabled: Boolean) {
+        viewModelScope.launch { prefs.setAutoDndAtPrayer(enabled) }
+    }
+
+    fun setHighContrastLargePrint(enabled: Boolean) {
+        viewModelScope.launch { prefs.setHighContrastLargePrint(enabled) }
+    }
+
+    fun setFajrFadeInAlarmEnabled(enabled: Boolean) {
+        viewModelScope.launch { prefs.setFajrFadeInAlarmEnabled(enabled) }
+    }
+
+    fun downloadAndPreviewAdhan(sound: PrayerAlertSound) {
+        if (!sound.isAdhanAudio) {
+            AdhanAudioPlayer.playAdhanOrChime(appContext, sound)
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isDownloadingAdhan = true) }
+            val ok = AdhanAudioPlayer.downloadAndCache(appContext, sound)
+            val updatedCache = PrayerAlertSound.entries
+                .filter { it.isAdhanAudio && AdhanAudioPlayer.isCached(appContext, it) }
+                .map { it.id }
+                .toSet()
+            _uiState.update {
+                it.copy(
+                    isDownloadingAdhan = false,
+                    cachedAdhanIds = updatedCache,
+                    errorMessage = if (ok) {
+                        "${sound.displayName} saved offline & playing preview."
+                    } else {
+                        "Could not download Adhan audio right now. Check connection."
+                    }
+                )
+            }
+            if (ok) {
+                AdhanAudioPlayer.playAdhanOrChime(appContext, sound)
+            }
+        }
+    }
+
+    fun stopAdhanPreview() {
+        AdhanAudioPlayer.stop()
+    }
+
     fun handleWidgetDestination(dest: String?, quranViewModel: QuranViewModel? = null) {
         when (dest) {
             PrayerTimesWidget.DEST_MASJIDS -> _uiState.update { it.copy(currentTab = MainTab.MASJIDS) }
@@ -778,12 +1062,19 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
     fun refreshOfflineStats() {
         val savedCount = repository.getSavedMasjidsCount()
         val totalBytes = OfflineMapTileCache.getTileCacheSizeBytes(appContext) +
+            repository.getCacheSizeBytes() +
             quranRepository.getCacheSizeBytes() +
-            hadithRepository.getCacheSizeBytes()
+            hadithRepository.getCacheSizeBytes() +
+            AdhanAudioPlayer.getCacheSizeBytes(appContext)
+        val updatedAdhanIds = PrayerAlertSound.entries
+            .filter { it.isAdhanAudio && AdhanAudioPlayer.isCached(appContext, it) }
+            .map { it.id }
+            .toSet()
         _uiState.update {
             it.copy(
                 savedMasjidsCount = savedCount,
-                offlineStorageBytes = totalBytes
+                offlineStorageBytes = totalBytes,
+                cachedAdhanIds = updatedAdhanIds
             )
         }
     }
@@ -839,12 +1130,46 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun clearAllOfflineCaches() {
+        QuranPlaybackController.getInstance(appContext).stopAudio()
         OfflineMapTileCache.clearTileCache(appContext)
         repository.clearOfflineMasjidCache()
         quranRepository.clearCache()
         hadithRepository.clearCache()
+        AdhanAudioPlayer.clearCache(appContext)
         refreshOfflineStats()
-        _uiState.update { it.copy(errorMessage = "Offline caches cleared.") }
+        _uiState.update {
+            it.copy(
+                cachedAdhanIds = emptySet(),
+                errorMessage = "Offline caches cleared."
+            )
+        }
+    }
+
+    fun downloadAllAdhanAudioOffline() {
+        if (_uiState.value.isDownloadingAdhan) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isDownloadingAdhan = true) }
+            val adhanSounds = PrayerAlertSound.entries.filter { it.isAdhanAudio }
+            var savedCount = 0
+            adhanSounds.forEach { sound ->
+                if (AdhanAudioPlayer.downloadAndCache(appContext, sound)) {
+                    savedCount++
+                }
+            }
+            refreshOfflineStats()
+            _uiState.update {
+                it.copy(
+                    isDownloadingAdhan = false,
+                    errorMessage = if (savedCount == adhanSounds.size) {
+                        "All $savedCount Adhan alerts saved for offline prayer alarms."
+                    } else if (savedCount > 0) {
+                        "Saved $savedCount of ${adhanSounds.size} Adhan alerts offline."
+                    } else {
+                        "Connect briefly to download Adhan alerts."
+                    }
+                )
+            }
+        }
     }
 
     fun updateCalculationMethod(method: CalculationMethod) {
@@ -895,9 +1220,14 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch { prefs.setAlertSound(sound) }
     }
 
-    fun sendTestNotification() {
+    fun sendTestNotification(fajrFadeInPreview: Boolean = false) {
         val nextLabel = _uiState.value.homePrayerSchedule.nextPrayer?.name?.displayName ?: "Next Prayer"
-        PrayerAlarmScheduler.sendTestNotification(appContext, _uiState.value.alertSound, nextLabel)
+        PrayerAlarmScheduler.sendTestNotification(
+            context = appContext,
+            sound = _uiState.value.alertSound,
+            nextPrayerLabel = if (fajrFadeInPreview) "Fajr" else nextLabel,
+            fajrFadeIn = fajrFadeInPreview
+        )
     }
 
     fun selectTasbeehPreset(presetId: String, defaultTarget: Int) {

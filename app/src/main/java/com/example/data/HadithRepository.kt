@@ -19,6 +19,8 @@ import java.util.Locale
 
 class HadithRepository(private val context: Context) {
 
+    private val networkMonitor by lazy { NetworkMonitor(context.applicationContext) }
+
     private val cacheDir: File by lazy {
         File(context.filesDir, "hadith_cache").apply { mkdirs() }
     }
@@ -60,7 +62,13 @@ class HadithRepository(private val context: Context) {
             }
             HadithSourceType.HADEETH_ENC -> {
                 val chapters = getChapters(book)
-                chapters.forEach { ch -> getHadithsForChapter(book, ch) }
+                var totalEntries = 0
+                chapters.forEach { ch ->
+                    totalEntries += getHadithsForChapter(book, ch).size
+                }
+                if (totalEntries == 0) {
+                    throw IllegalStateException("Could not download ${book.titleEnglish} right now. Please try again when online.")
+                }
                 File(cacheDir, "book_complete_${book.id}.flag").writeText("1")
             }
         }
@@ -224,6 +232,12 @@ class HadithRepository(private val context: Context) {
 
         if (sectionsObj == null || sectionsObj.length() <= 1) {
             File(cacheDir, "${prefix}_all.json").writeText(rawJson)
+            File(cacheDir, "${prefix}_1.json").writeText(rawJson)
+            sectionsObj?.keys()?.forEach { key ->
+                if (key.isNotBlank() && key != "0") {
+                    File(cacheDir, "${prefix}_$key.json").writeText(rawJson)
+                }
+            }
             return
         }
 
@@ -301,11 +315,17 @@ class HadithRepository(private val context: Context) {
                 "https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1/editions/eng-$slug.json"
             )
         } else {
-            fetchCachedOrNetwork(
-                "fawaz_eng_${slug}_${chapter.id}.json",
-                "https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1/editions/eng-$slug/sections/${chapter.id}.min.json",
-                "https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1/editions/eng-$slug/sections/${chapter.id}.json"
-            )
+            val sectionCache = File(cacheDir, "fawaz_eng_${slug}_${chapter.id}.json")
+            val allCache = File(cacheDir, "fawaz_eng_${slug}_all.json")
+            if (!sectionCache.exists() && allCache.exists() && allCache.length() > 2) {
+                allCache.readText()
+            } else {
+                fetchCachedOrNetwork(
+                    sectionCache.name,
+                    "https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1/editions/eng-$slug/sections/${chapter.id}.min.json",
+                    "https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1/editions/eng-$slug/sections/${chapter.id}.json"
+                )
+            }
         }
 
         val araMap = runCatching {
@@ -316,11 +336,17 @@ class HadithRepository(private val context: Context) {
                     "https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1/editions/ara-$slug.json"
                 )
             } else {
-                fetchCachedOrNetwork(
-                    "fawaz_ara_${slug}_${chapter.id}.json",
-                    "https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1/editions/ara-$slug/sections/${chapter.id}.min.json",
-                    "https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1/editions/ara-$slug/sections/${chapter.id}.json"
-                )
+                val araSectionCache = File(cacheDir, "fawaz_ara_${slug}_${chapter.id}.json")
+                val araAllCache = File(cacheDir, "fawaz_ara_${slug}_all.json")
+                if (!araSectionCache.exists() && araAllCache.exists() && araAllCache.length() > 2) {
+                    araAllCache.readText()
+                } else {
+                    fetchCachedOrNetwork(
+                        araSectionCache.name,
+                        "https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1/editions/ara-$slug/sections/${chapter.id}.min.json",
+                        "https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1/editions/ara-$slug/sections/${chapter.id}.json"
+                    )
+                }
             }
             val arr = JSONObject(araJson).optJSONArray("hadiths") ?: JSONArray()
             val map = HashMap<String, String>(arr.length())
@@ -540,6 +566,9 @@ class HadithRepository(private val context: Context) {
     }
 
     private fun fetchHttpString(vararg urls: String): String {
+        if (!networkMonitor.isCurrentlyOnline()) {
+            throw IllegalStateException("Offline: book chapter is not downloaded yet.")
+        }
         var lastError: Throwable? = null
         for (url in urls) {
             try {
@@ -639,17 +668,37 @@ class HadithRepository(private val context: Context) {
                     val files = cacheDir.listFiles { f ->
                         f.name.startsWith("fawaz_eng_${slug}_") && f.name.endsWith(".json")
                     }.orEmpty()
+                    val seenNumbers = HashSet<String>()
                     for (file in files) {
                         if (hits.size >= limit) break
                         val secKey = file.name.removePrefix("fawaz_eng_${slug}_").removeSuffix(".json")
                         runCatching {
+                            val araMap = runCatching {
+                                val araFile = File(cacheDir, "fawaz_ara_${slug}_$secKey.json")
+                                    .takeIf { it.exists() }
+                                    ?: File(cacheDir, "fawaz_ara_${slug}_all.json").takeIf { it.exists() }
+                                val araArr = araFile?.let { JSONObject(it.readText()).optJSONArray("hadiths") }
+                                    ?: JSONArray()
+                                HashMap<String, String>(araArr.length()).apply {
+                                    for (j in 0 until araArr.length()) {
+                                        val obj = araArr.getJSONObject(j)
+                                        val n = obj.opt("hadithnumber")?.toString() ?: continue
+                                        put(n, obj.optString("text").trim())
+                                    }
+                                }
+                            }.getOrDefault(emptyMap())
+
                             val engArr = JSONObject(file.readText()).optJSONArray("hadiths") ?: return@runCatching
                             for (i in 0 until engArr.length()) {
                                 if (hits.size >= limit) break
                                 val obj = engArr.getJSONObject(i)
                                 val num = obj.opt("hadithnumber")?.toString() ?: "${i + 1}"
+                                if (!seenNumbers.add(num)) continue
                                 val text = obj.optString("text").trim()
-                                if (text.contains(trimmed, ignoreCase = true)) {
+                                val arabic = araMap[num].orEmpty()
+                                if (text.contains(trimmed, ignoreCase = true) ||
+                                    (arabic.isNotEmpty() && arabic.contains(trimmed))
+                                ) {
                                     hits.add(
                                         com.example.domain.HadithSearchHit(
                                             bookId = book.id,
@@ -659,8 +708,8 @@ class HadithRepository(private val context: Context) {
                                                 id = "${book.id}_${secKey}_$num",
                                                 numberLabel = "Hadith $num",
                                                 bookTitle = book.titleEnglish,
-                                                chapterTitle = "Section $secKey",
-                                                arabicText = "",
+                                                chapterTitle = if (secKey == "all") book.titleEnglish else "Section $secKey",
+                                                arabicText = arabic,
                                                 narrator = "",
                                                 englishText = text,
                                                 reference = "${book.titleEnglish} $num"

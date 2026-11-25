@@ -20,6 +20,9 @@ import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -30,11 +33,16 @@ import kotlin.coroutines.resume
 
 class LocationProvider(
     private val context: Context,
-    private val nominatimApi: NominatimApi = NetworkClients.nominatimApi
+    private val nominatimApi: NominatimApi = NetworkClients.nominatimApi,
+    private val photonApi: PhotonApi = NetworkClients.photonApi
 ) {
 
     private val fusedClient by lazy {
         LocationServices.getFusedLocationProviderClient(context)
+    }
+
+    private val networkMonitor by lazy {
+        NetworkMonitor(context)
     }
 
     private val geocodeCacheFile: File by lazy {
@@ -62,36 +70,67 @@ class LocationProvider(
     }
 
     @SuppressLint("MissingPermission")
+    suspend fun getFastCachedLocation(): LatLngPoint? {
+        if (!hasLocationPermission()) return null
+        val best = getBestLastKnownLocation(hasGms = isPlayServicesAvailable(), timeoutMs = 450L)
+        return best?.let { LatLngPoint(it.latitude, it.longitude) }
+    }
+
+    @SuppressLint("MissingPermission")
     suspend fun getCurrentOrLastLocation(): LatLngPoint? {
         if (!hasLocationPermission()) return null
 
         val hasGms = isPlayServicesAvailable()
 
-        // 1. If Google Play Services is available (Pixel, Samsung, etc.), try high-accuracy Fused fix
-        if (hasGms) {
-            val highAcc = withTimeoutOrNull(4_500L) {
-                getFreshFusedLocation(Priority.PRIORITY_HIGH_ACCURACY)
+        // 1. Check cached location first — if reasonably fresh (< 3 min) and accurate (< 250m), return immediately!
+        val lastKnown = getBestLastKnownLocation(hasGms = hasGms, timeoutMs = 500L)
+        val nowMs = System.currentTimeMillis()
+        if (lastKnown != null &&
+            (nowMs - lastKnown.time) in 0L..180_000L &&
+            (!lastKnown.hasAccuracy() || lastKnown.accuracy <= 250f)
+        ) {
+            return LatLngPoint(lastKnown.latitude, lastKnown.longitude)
+        }
+
+        // 2. Race GMS Fused + Framework LocationManager concurrently (max ~3.8s total instead of 11s sequential)
+        val freshFix = withTimeoutOrNull(3_800L) {
+            coroutineScope {
+                val jobs = buildList {
+                    if (hasGms) {
+                        add(async { getFreshFusedLocation(Priority.PRIORITY_HIGH_ACCURACY) })
+                        add(async { getFreshFusedLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY) })
+                    }
+                    add(async { getFrameworkFreshLocation() })
+                }
+                // Pick first non-null result cleanly
+                var firstFix: LatLngPoint? = null
+                val remaining = jobs.toMutableList()
+                while (remaining.isNotEmpty() && firstFix == null) {
+                    val finished = select<Pair<Int, LatLngPoint?>> {
+                        remaining.forEachIndexed { index, deferred ->
+                            deferred.onAwait { res -> index to res }
+                        }
+                    }
+                    remaining.removeAt(finished.first)
+                    if (finished.second != null) {
+                        firstFix = finished.second
+                    }
+                }
+                remaining.forEach { it.cancel() }
+                firstFix
             }
-            if (highAcc != null) return highAcc
         }
+        if (freshFix != null) return freshFix
 
-        // 2. Framework LocationManager fresh fix — essential on LineageOS, Waydroid, GrapheneOS, and de-Googled phones
-        val frameworkFresh = withTimeoutOrNull(3_500L) {
-            getFrameworkFreshLocation()
-        }
-        if (frameworkFresh != null) return frameworkFresh
+        // 3. Fallback to any last-known fix regardless of age (GPS works completely offline!)
+        val fallbackKnown = lastKnown ?: getBestLastKnownLocation(hasGms = hasGms, timeoutMs = 800L)
+        return fallbackKnown?.let { LatLngPoint(it.latitude, it.longitude) }
+    }
 
-        // 3. Balanced Fused fallback when Play Services is installed
-        if (hasGms) {
-            val balanced = withTimeoutOrNull(3_000L) {
-                getFreshFusedLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY)
-            }
-            if (balanced != null) return balanced
-        }
-
-        // 4. Last-known fix comparison across GMS + framework LocationManager providers
+    @SuppressLint("MissingPermission")
+    private suspend fun getBestLastKnownLocation(hasGms: Boolean, timeoutMs: Long): Location? {
         val lastFused: Location? = if (hasGms) {
-            withTimeoutOrNull(1_500L) {
+            withTimeoutOrNull(timeoutMs) {
                 suspendCancellableCoroutine { cont ->
                     runCatching {
                         fusedClient.lastLocation
@@ -109,9 +148,7 @@ class LocationProvider(
         } else {
             null
         }
-
-        val bestKnown = collectBestLastKnownFramework(lastFused)
-        return bestKnown?.let { LatLngPoint(it.latitude, it.longitude) }
+        return collectBestLastKnownFramework(lastFused)
     }
 
     @SuppressLint("MissingPermission")
@@ -153,17 +190,30 @@ class LocationProvider(
             if (!fineGranted) {
                 add(LocationManager.GPS_PROVIDER)
             }
-        }.filter { provider ->
+        }.distinct().filter { provider ->
             runCatching { lm.isProviderEnabled(provider) }.getOrDefault(false)
         }
+        if (candidateProviders.isEmpty()) return null
 
-        for (provider in candidateProviders) {
-            val point = withTimeoutOrNull(2_000L) {
-                requestSingleFrameworkFix(lm, provider)
+        return coroutineScope {
+            val jobs = candidateProviders.map { provider ->
+                async {
+                    withTimeoutOrNull(3_200L) {
+                        requestSingleFrameworkFix(lm, provider)
+                    }
+                }
+            }.toMutableList()
+            var winner: LatLngPoint? = null
+            while (jobs.isNotEmpty() && winner == null) {
+                val finished = select<Pair<Int, LatLngPoint?>> {
+                    jobs.forEachIndexed { idx, d -> d.onAwait { res -> idx to res } }
+                }
+                jobs.removeAt(finished.first)
+                if (finished.second != null) winner = finished.second
             }
-            if (point != null) return point
+            jobs.forEach { it.cancel() }
+            winner
         }
-        return null
     }
 
     @SuppressLint("MissingPermission")
@@ -242,25 +292,33 @@ class LocationProvider(
         val key = query.trim().lowercase(Locale.US)
         if (key.isBlank()) return@withContext null
 
+        // Offline local cache check first if offline so we never stall on network timeouts
+        val isOnline = networkMonitor.isCurrentlyOnline()
+        if (!isOnline) {
+            return@withContext loadGeocodeCache(key)
+        }
+
         if (Geocoder.isPresent()) {
             val geocoder = Geocoder(context, Locale.getDefault())
-            val fromDevice = try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    suspendCancellableCoroutine { cont ->
-                        geocoder.getFromLocationName(query, 1) { addresses ->
-                            val first = addresses.firstOrNull()
-                            if (cont.isActive) {
-                                cont.resume(first?.let { LatLngPoint(it.latitude, it.longitude) })
+            val fromDevice = withTimeoutOrNull(2_500L) {
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        suspendCancellableCoroutine { cont ->
+                            geocoder.getFromLocationName(query, 1) { addresses ->
+                                val first = addresses.firstOrNull()
+                                if (cont.isActive) {
+                                    cont.resume(first?.let { LatLngPoint(it.latitude, it.longitude) })
+                                }
                             }
                         }
+                    } else {
+                        @Suppress("DEPRECATION")
+                        val addresses = geocoder.getFromLocationName(query, 1)
+                        addresses?.firstOrNull()?.let { LatLngPoint(it.latitude, it.longitude) }
                     }
-                } else {
-                    @Suppress("DEPRECATION")
-                    val addresses = geocoder.getFromLocationName(query, 1)
-                    addresses?.firstOrNull()?.let { LatLngPoint(it.latitude, it.longitude) }
+                } catch (_: Exception) {
+                    null
                 }
-            } catch (_: Exception) {
-                null
             }
             if (fromDevice != null) {
                 saveGeocodeCache(key, fromDevice)
@@ -280,6 +338,18 @@ class LocationProvider(
                     saveGeocodeCache(key, pt)
                     return@withContext pt
                 }
+            }
+        } catch (_: Exception) {
+        }
+
+        // Free Photon (Komoot) geocoding fallback
+        try {
+            val photon = photonApi.search(query = query, limit = 1)
+            val coords = photon.features.firstOrNull()?.geometry?.coordinates
+            if (coords != null && coords.size >= 2) {
+                val pt = LatLngPoint(latitude = coords[1], longitude = coords[0])
+                saveGeocodeCache(key, pt)
+                return@withContext pt
             }
         } catch (_: Exception) {
         }
@@ -310,8 +380,19 @@ class LocationProvider(
         return runCatching {
             if (!geocodeCacheFile.exists()) return null
             val root = JSONObject(geocodeCacheFile.readText())
-            val obj = root.optJSONObject(normalizedKey) ?: return null
-            LatLngPoint(obj.getDouble("lat"), obj.getDouble("lng"))
+            val exact = root.optJSONObject(normalizedKey)
+            if (exact != null) {
+                return LatLngPoint(exact.getDouble("lat"), exact.getDouble("lng"))
+            }
+            val keys = root.keys()
+            while (keys.hasNext()) {
+                val k = keys.next()
+                if (k.contains(normalizedKey) || normalizedKey.contains(k)) {
+                    val obj = root.optJSONObject(k) ?: continue
+                    return LatLngPoint(obj.getDouble("lat"), obj.getDouble("lng"))
+                }
+            }
+            null
         }.getOrNull()
     }
 }

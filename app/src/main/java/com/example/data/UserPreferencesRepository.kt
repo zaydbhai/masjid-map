@@ -65,7 +65,13 @@ data class UserSettings(
     val widgetUse24Hour: Boolean = false,
     val widgetBottomMode: WidgetBottomMode = WidgetBottomMode.QUICK_TILES,
     val widgetQuickTiles: List<WidgetQuickTile> = WidgetQuickTile.defaultSelection,
-    val widgetCustomTitle: String = ""
+    val widgetCustomTitle: String = "",
+    val suhoorReminderEnabled: Boolean = false,
+    val suhoorLeadMinutes: Int = 30,
+    val persistentCountdownNotification: Boolean = false,
+    val autoDndAtPrayer: Boolean = false,
+    val highContrastLargePrint: Boolean = false,
+    val fajrFadeInAlarmEnabled: Boolean = false
 ) {
     fun isPrayerAlertEnabled(name: PrayerName): Boolean = when (name) {
         PrayerName.FAJR -> notifyFajr
@@ -119,6 +125,12 @@ class UserPreferencesRepository(private val context: Context) {
         val WIDGET_BOTTOM_MODE = stringPreferencesKey("widget_bottom_mode")
         val WIDGET_QUICK_TILES = stringPreferencesKey("widget_quick_tiles")
         val WIDGET_CUSTOM_TITLE = stringPreferencesKey("widget_custom_title")
+        val SUHOOR_REMINDER_ENABLED = booleanPreferencesKey("suhoor_reminder_enabled")
+        val SUHOOR_LEAD_MINUTES = intPreferencesKey("suhoor_lead_minutes")
+        val PERSISTENT_COUNTDOWN_NOTIF = booleanPreferencesKey("persistent_countdown_notif")
+        val AUTO_DND_AT_PRAYER = booleanPreferencesKey("auto_dnd_at_prayer")
+        val HIGH_CONTRAST_LARGE_PRINT = booleanPreferencesKey("high_contrast_large_print")
+        val FAJR_FADE_IN_ALARM = booleanPreferencesKey("fajr_fade_in_alarm")
     }
 
     val settingsFlow: Flow<UserSettings> = context.dataStore.data.map { prefs ->
@@ -164,7 +176,13 @@ class UserPreferencesRepository(private val context: Context) {
             widgetUse24Hour = prefs[Keys.WIDGET_USE_24H] ?: false,
             widgetBottomMode = WidgetBottomMode.fromId(prefs[Keys.WIDGET_BOTTOM_MODE]),
             widgetQuickTiles = WidgetQuickTile.parseList(prefs[Keys.WIDGET_QUICK_TILES]),
-            widgetCustomTitle = prefs[Keys.WIDGET_CUSTOM_TITLE].orEmpty()
+            widgetCustomTitle = prefs[Keys.WIDGET_CUSTOM_TITLE].orEmpty(),
+            suhoorReminderEnabled = prefs[Keys.SUHOOR_REMINDER_ENABLED] ?: false,
+            suhoorLeadMinutes = (prefs[Keys.SUHOOR_LEAD_MINUTES] ?: 30).coerceIn(15, 90),
+            persistentCountdownNotification = prefs[Keys.PERSISTENT_COUNTDOWN_NOTIF] ?: false,
+            autoDndAtPrayer = prefs[Keys.AUTO_DND_AT_PRAYER] ?: false,
+            highContrastLargePrint = prefs[Keys.HIGH_CONTRAST_LARGE_PRINT] ?: false,
+            fajrFadeInAlarmEnabled = prefs[Keys.FAJR_FADE_IN_ALARM] ?: false
         )
     }
 
@@ -318,5 +336,29 @@ class UserPreferencesRepository(private val context: Context) {
 
     suspend fun setWidgetCustomTitle(title: String) {
         context.dataStore.edit { it[Keys.WIDGET_CUSTOM_TITLE] = title.take(32) }
+    }
+
+    suspend fun setSuhoorReminderEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.SUHOOR_REMINDER_ENABLED] = enabled }
+    }
+
+    suspend fun setSuhoorLeadMinutes(minutes: Int) {
+        context.dataStore.edit { it[Keys.SUHOOR_LEAD_MINUTES] = minutes.coerceIn(15, 90) }
+    }
+
+    suspend fun setPersistentCountdownNotification(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.PERSISTENT_COUNTDOWN_NOTIF] = enabled }
+    }
+
+    suspend fun setAutoDndAtPrayer(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.AUTO_DND_AT_PRAYER] = enabled }
+    }
+
+    suspend fun setHighContrastLargePrint(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.HIGH_CONTRAST_LARGE_PRINT] = enabled }
+    }
+
+    suspend fun setFajrFadeInAlarmEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.FAJR_FADE_IN_ALARM] = enabled }
     }
 }

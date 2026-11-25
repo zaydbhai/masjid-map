@@ -29,6 +29,7 @@ class MainActivity : ComponentActivity() {
 
             MasjidMapTheme(
                 themeMode = state.themeMode,
+                highContrastLargePrint = state.highContrastLargePrint,
                 arabicFont = state.arabicFont,
                 arabicFontSizeSp = state.arabicFontSizeSp,
                 englishFont = state.englishFont,

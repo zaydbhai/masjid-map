@@ -2,6 +2,7 @@ package com.example.data
 
 import android.content.Context
 import com.example.domain.HadithEntry
+import com.example.domain.JumuahTimes
 import com.example.domain.PrayerName
 import com.example.domain.QuranBookmark
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -28,6 +29,9 @@ class BookmarksAndMasjidExtrasRepository private constructor(context: Context) {
 
     private val _hadithBookmarks = MutableStateFlow(loadHadithBookmarks())
     val hadithBookmarks: StateFlow<List<HadithEntry>> = _hadithBookmarks.asStateFlow()
+
+    private val _jumuahByMasjid = MutableStateFlow(loadJumuahMap())
+    val jumuahByMasjid: StateFlow<Map<String, JumuahTimes>> = _jumuahByMasjid.asStateFlow()
 
     fun toggleFavoriteMasjid(masjidId: String): Boolean {
         val next = _favoriteMasjidIds.value.toMutableSet()
@@ -60,6 +64,18 @@ class BookmarksAndMasjidExtrasRepository private constructor(context: Context) {
         updatedAll.remove(masjidId)
         saveIqamahMap(updatedAll)
         _iqamahByMasjid.value = updatedAll
+    }
+
+    fun setJumuahTimes(masjidId: String, firstKhutbah: String, secondKhutbah: String) {
+        val times = JumuahTimes(firstKhutbah.trim(), secondKhutbah.trim())
+        val updatedAll = _jumuahByMasjid.value.toMutableMap()
+        if (!times.isConfigured) {
+            updatedAll.remove(masjidId)
+        } else {
+            updatedAll[masjidId] = times
+        }
+        saveJumuahMap(updatedAll)
+        _jumuahByMasjid.value = updatedAll
     }
 
     fun toggleQuranBookmark(
@@ -224,9 +240,43 @@ class BookmarksAndMasjidExtrasRepository private constructor(context: Context) {
         prefs.edit().putString(KEY_HADITH_BOOKMARKS, arr.toString()).apply()
     }
 
+    private fun loadJumuahMap(): Map<String, JumuahTimes> {
+        val raw = prefs.getString(KEY_JUMUAH_TIMES, null) ?: return emptyMap()
+        return runCatching {
+            val root = JSONObject(raw)
+            val result = LinkedHashMap<String, JumuahTimes>()
+            val keys = root.keys()
+            while (keys.hasNext()) {
+                val mId = keys.next()
+                val obj = root.getJSONObject(mId)
+                val times = JumuahTimes(
+                    firstKhutbah = obj.optString("first").trim(),
+                    secondKhutbah = obj.optString("second").trim()
+                )
+                if (times.isConfigured) result[mId] = times
+            }
+            result
+        }.getOrDefault(emptyMap())
+    }
+
+    private fun saveJumuahMap(map: Map<String, JumuahTimes>) {
+        val root = JSONObject()
+        map.forEach { (mId, times) ->
+            root.put(
+                mId,
+                JSONObject().apply {
+                    put("first", times.firstKhutbah)
+                    put("second", times.secondKhutbah)
+                }
+            )
+        }
+        prefs.edit().putString(KEY_JUMUAH_TIMES, root.toString()).apply()
+    }
+
     companion object {
         private const val KEY_FAVORITE_MASJIDS = "favorite_masjid_ids"
         private const val KEY_IQAMAH_TIMES = "iqamah_times_json"
+        private const val KEY_JUMUAH_TIMES = "jumuah_times_json"
         private const val KEY_QURAN_BOOKMARKS = "quran_bookmarks_json"
         private const val KEY_HADITH_BOOKMARKS = "hadith_bookmarks_json"
 

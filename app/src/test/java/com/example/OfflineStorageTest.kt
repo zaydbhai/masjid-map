@@ -127,7 +127,11 @@ class OfflineStorageTest {
     @Test
     fun cachedRoadRouteReplaysCleanlyWhenOffline() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        val onlineRepo = MasjidRepository(context = context, osrmApi = onlineStubOsrmApi)
+        val onlineRepo = MasjidRepository(
+            context = context,
+            osrmApi = onlineStubOsrmApi,
+            onlineCheck = { true }
+        )
         onlineRepo.clearOfflineMasjidCache()
 
         val origin = LatLngPoint(38.5, -120.2)
@@ -146,7 +150,11 @@ class OfflineStorageTest {
         val fetchedOnline = onlineRepo.fetchRoute(origin, masjid, TravelMode.DRIVE)
         assertEquals(RouteSource.OSRM_FALLBACK, fetchedOnline.source)
 
-        val offlineRepo = MasjidRepository(context = context, osrmApi = offlineOsrmApi)
+        val offlineRepo = MasjidRepository(
+            context = context,
+            osrmApi = offlineOsrmApi,
+            onlineCheck = { false }
+        )
         val replayedOffline = offlineRepo.fetchRoute(origin, masjid, TravelMode.DRIVE)
         assertEquals(RouteSource.OFFLINE_CACHE, replayedOffline.source)
         assertEquals(3, replayedOffline.polylinePoints.size)

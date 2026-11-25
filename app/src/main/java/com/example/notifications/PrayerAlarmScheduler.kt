@@ -1,27 +1,43 @@
 package com.example.notifications
 
+import android.Manifest
 import android.app.AlarmManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.RingtoneManager
 import android.os.Build
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
+import com.example.MainActivity
+import com.example.R
+import com.example.data.AdhanAudioPlayer
 import com.example.data.UserPreferencesRepository
 import com.example.data.UserSettings
+import com.example.domain.GeoFormatters
 import com.example.domain.LatLngPoint
 import com.example.domain.PrayerAlertSound
 import com.example.domain.PrayerName
 import com.example.domain.PrayerTimeCalculator
 import kotlinx.coroutines.flow.first
+import kotlin.math.roundToInt
 
 object PrayerAlarmScheduler {
 
     private const val CHANNEL_CHIME = "prayer_alerts_chime"
+    private const val CHANNEL_ADHAN_CUSTOM = "prayer_alerts_adhan_custom"
     private const val CHANNEL_VIBRATE = "prayer_alerts_vibrate"
     private const val CHANNEL_SILENT = "prayer_alerts_silent"
+    private const val CHANNEL_ONGOING = "prayer_ongoing_countdown"
+
+    const val NOTIFICATION_ID_ONGOING = 4200
+    private const val REQUEST_CODE_SUHOOR = 4110
+    private const val REQUEST_CODE_RESTORE_DND = 4190
 
     private val alertPrayers = listOf(
         PrayerName.FAJR,
@@ -31,8 +47,13 @@ object PrayerAlarmScheduler {
         PrayerName.ISHA
     )
 
-    fun channelIdFor(sound: PrayerAlertSound): String = when (sound) {
+    fun channelIdFor(context: Context, sound: PrayerAlertSound): String = when (sound) {
         PrayerAlertSound.DEFAULT_CHIME -> CHANNEL_CHIME
+        PrayerAlertSound.ADHAN_MAKKAH,
+        PrayerAlertSound.ADHAN_MADINAH,
+        PrayerAlertSound.ADHAN_TAKBEER -> {
+            if (AdhanAudioPlayer.isCached(context, sound)) CHANNEL_ADHAN_CUSTOM else CHANNEL_CHIME
+        }
         PrayerAlertSound.VIBRATE_ONLY -> CHANNEL_VIBRATE
         PrayerAlertSound.SILENT -> CHANNEL_SILENT
     }
@@ -57,6 +78,16 @@ object PrayerAlarmScheduler {
             setSound(soundUri, audioAttrs)
         }
 
+        val adhanCustomChannel = NotificationChannel(
+            CHANNEL_ADHAN_CUSTOM,
+            "Prayer Reminders (Adhan Audio)",
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = "High-priority alerts paired with Makkah/Madinah Adhan audio"
+            enableVibration(true)
+            setSound(null, null)
+        }
+
         val vibrateChannel = NotificationChannel(
             CHANNEL_VIBRATE,
             "Prayer Reminders (Vibrate)",
@@ -77,7 +108,19 @@ object PrayerAlarmScheduler {
             setSound(null, null)
         }
 
-        nm.createNotificationChannels(listOf(chimeChannel, vibrateChannel, silentChannel))
+        val ongoingChannel = NotificationChannel(
+            CHANNEL_ONGOING,
+            "Live Next-Prayer Countdown",
+            NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            description = "Optional ongoing notification showing next Salah and Qibla bearing"
+            enableVibration(false)
+            setSound(null, null)
+        }
+
+        nm.createNotificationChannels(
+            listOf(chimeChannel, adhanCustomChannel, vibrateChannel, silentChannel, ongoingChannel)
+        )
     }
 
     suspend fun scheduleUpcoming(context: Context) {
@@ -90,13 +133,12 @@ object PrayerAlarmScheduler {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
         cancelAll(context, alarmManager)
 
-        if (!settings.notificationsEnabled) return
+        updateOngoingCountdownNotification(context, settings)
 
         val loc = settings.lastLocation ?: LatLngPoint(21.4225, 39.8262)
         val now = System.currentTimeMillis()
         val leadMs = settings.reminderLeadMinutes * 60_000L
 
-        // Compute today & tomorrow schedules so every enabled prayer gets its next occurrence
         val today = PrayerTimeCalculator.calculateSchedule(
             latitude = loc.latitude,
             longitude = loc.longitude,
@@ -112,64 +154,187 @@ object PrayerAlarmScheduler {
             madhab = settings.asrMadhab
         )
 
-        alertPrayers.forEachIndexed { idx, prayer ->
-            if (!settings.isPrayerAlertEnabled(prayer)) return@forEachIndexed
+        if (settings.notificationsEnabled) {
+            alertPrayers.forEachIndexed { idx, prayer ->
+                if (!settings.isPrayerAlertEnabled(prayer)) return@forEachIndexed
 
-            val todayEntry = today.entries.firstOrNull { it.name == prayer }
-            val tomorrowEntry = tomorrow.entries.firstOrNull { it.name == prayer }
+                val todayEntry = today.entries.firstOrNull { it.name == prayer }
+                val tomorrowEntry = tomorrow.entries.firstOrNull { it.name == prayer }
 
-            val candidateToday = todayEntry?.let { it.timeMillis - leadMs }
-            val chosenEntry = if (candidateToday != null && candidateToday > now + 15_000L) {
-                todayEntry to candidateToday
-            } else if (tomorrowEntry != null) {
-                tomorrowEntry to (tomorrowEntry.timeMillis - leadMs)
-            } else {
-                null
-            } ?: return@forEachIndexed
+                val candidateToday = todayEntry?.let { it.timeMillis - leadMs }
+                val chosenEntry = if (candidateToday != null && candidateToday > now + 15_000L) {
+                    todayEntry to candidateToday
+                } else if (tomorrowEntry != null) {
+                    tomorrowEntry to (tomorrowEntry.timeMillis - leadMs)
+                } else {
+                    null
+                } ?: return@forEachIndexed
 
-            val (entry, triggerAtMillis) = chosenEntry
-            val intent = Intent(context, PrayerAlarmReceiver::class.java).apply {
-                putExtra(PrayerAlarmReceiver.EXTRA_PRAYER_NAME, prayer.displayName)
-                putExtra(PrayerAlarmReceiver.EXTRA_PRAYER_TIME, entry.formattedTime)
-                putExtra(PrayerAlarmReceiver.EXTRA_LEAD_MINUTES, settings.reminderLeadMinutes)
-                putExtra(PrayerAlarmReceiver.EXTRA_SOUND_ID, settings.alertSound.id)
-                putExtra(PrayerAlarmReceiver.EXTRA_NOTIFICATION_ID, 4100 + idx)
-            }
+                val (entry, triggerAtMillis) = chosenEntry
+                val intent = Intent(context, PrayerAlarmReceiver::class.java).apply {
+                    putExtra(PrayerAlarmReceiver.EXTRA_PRAYER_NAME, prayer.displayName)
+                    putExtra(PrayerAlarmReceiver.EXTRA_PRAYER_TIME, entry.formattedTime)
+                    putExtra(PrayerAlarmReceiver.EXTRA_LEAD_MINUTES, settings.reminderLeadMinutes)
+                    putExtra(PrayerAlarmReceiver.EXTRA_SOUND_ID, settings.alertSound.id)
+                    putExtra(PrayerAlarmReceiver.EXTRA_NOTIFICATION_ID, 4100 + idx)
+                    putExtra(PrayerAlarmReceiver.EXTRA_AUTO_DND, settings.autoDndAtPrayer)
+                    putExtra(
+                        PrayerAlarmReceiver.EXTRA_FAJR_FADE_IN,
+                        prayer == PrayerName.FAJR && settings.reminderLeadMinutes == 0 && settings.fajrFadeInAlarmEnabled
+                    )
+                }
 
-            val pendingIntent = PendingIntent.getBroadcast(
-                context,
-                4100 + idx,
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-
-            runCatching {
-                alarmManager.setAndAllowWhileIdle(
-                    AlarmManager.RTC_WAKEUP,
-                    triggerAtMillis,
-                    pendingIntent
+                val pendingIntent = PendingIntent.getBroadcast(
+                    context,
+                    4100 + idx,
+                    intent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                 )
+
+                runCatching {
+                    alarmManager.setAndAllowWhileIdle(
+                        AlarmManager.RTC_WAKEUP,
+                        triggerAtMillis,
+                        pendingIntent
+                    )
+                }
             }
         }
+
+        if (settings.suhoorReminderEnabled) {
+            val todayFajr = today.entries.firstOrNull { it.name == PrayerName.FAJR }
+            val tomorrowFajr = tomorrow.entries.firstOrNull { it.name == PrayerName.FAJR }
+            val suhoorLeadMs = settings.suhoorLeadMinutes * 60_000L
+            val todayTrigger = todayFajr?.let { it.timeMillis - suhoorLeadMs }
+            val chosen = if (todayTrigger != null && todayTrigger > now + 15_000L) {
+                todayFajr to todayTrigger
+            } else if (tomorrowFajr != null) {
+                tomorrowFajr to (tomorrowFajr.timeMillis - suhoorLeadMs)
+            } else {
+                null
+            }
+
+            if (chosen != null) {
+                val (fajrEntry, triggerMs) = chosen
+                val intent = Intent(context, PrayerAlarmReceiver::class.java).apply {
+                    putExtra(PrayerAlarmReceiver.EXTRA_PRAYER_NAME, "Suhoor")
+                    putExtra(PrayerAlarmReceiver.EXTRA_PRAYER_TIME, fajrEntry.formattedTime)
+                    putExtra(PrayerAlarmReceiver.EXTRA_LEAD_MINUTES, settings.suhoorLeadMinutes)
+                    putExtra(PrayerAlarmReceiver.EXTRA_SOUND_ID, settings.alertSound.id)
+                    putExtra(PrayerAlarmReceiver.EXTRA_NOTIFICATION_ID, REQUEST_CODE_SUHOOR)
+                    putExtra(PrayerAlarmReceiver.EXTRA_IS_SUHOOR, true)
+                }
+                val pi = PendingIntent.getBroadcast(
+                    context,
+                    REQUEST_CODE_SUHOOR,
+                    intent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+                runCatching {
+                    alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerMs, pi)
+                }
+            }
+        }
+    }
+
+    fun scheduleDndRestore(context: Context, delayMinutes: Int = 15) {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
+        val intent = Intent(context, PrayerAlarmReceiver::class.java).apply {
+            action = PrayerAlarmReceiver.ACTION_RESTORE_DND
+        }
+        val pi = PendingIntent.getBroadcast(
+            context,
+            REQUEST_CODE_RESTORE_DND,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        runCatching {
+            alarmManager.setAndAllowWhileIdle(
+                AlarmManager.RTC_WAKEUP,
+                System.currentTimeMillis() + delayMinutes * 60_000L,
+                pi
+            )
+        }
+    }
+
+    fun updateOngoingCountdownNotification(context: Context, settings: UserSettings) {
+        val nm = NotificationManagerCompat.from(context)
+        if (!settings.persistentCountdownNotification) {
+            runCatching { nm.cancel(NOTIFICATION_ID_ONGOING) }
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val granted = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!granted) return
+        }
+
+        ensureChannelsCreated(context)
+        val loc = settings.lastLocation ?: LatLngPoint(21.4225, 39.8262)
+        val schedule = PrayerTimeCalculator.calculateSchedule(
+            latitude = loc.latitude,
+            longitude = loc.longitude,
+            method = settings.calculationMethod,
+            madhab = settings.asrMadhab
+        )
+        val next = schedule.nextPrayer ?: return
+        val qiblaDeg = PrayerTimeCalculator.qiblaBearingDegrees(loc).roundToInt()
+        val cardinal = PrayerTimeCalculator.compassCardinal(qiblaDeg.toDouble())
+        val countdown = GeoFormatters.formatCountdown(schedule.minutesUntilNext)
+
+        val openIntent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val openPi = PendingIntent.getActivity(
+            context,
+            NOTIFICATION_ID_ONGOING,
+            openIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification = NotificationCompat.Builder(context, CHANNEL_ONGOING)
+            .setSmallIcon(R.drawable.ic_prayer_notification)
+            .setContentTitle("Next: ${next.name.displayName} at ${next.formattedTime}")
+            .setContentText("$countdown · Qibla $qiblaDeg° $cardinal")
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setSilent(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setContentIntent(openPi)
+            .build()
+
+        runCatching { nm.notify(NOTIFICATION_ID_ONGOING, notification) }
     }
 
     private fun cancelAll(context: Context, alarmManager: AlarmManager) {
         alertPrayers.forEachIndexed { idx, _ ->
-            val intent = Intent(context, PrayerAlarmReceiver::class.java)
-            val pendingIntent = PendingIntent.getBroadcast(
-                context,
-                4100 + idx,
-                intent,
-                PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
-            )
-            if (pendingIntent != null) {
-                alarmManager.cancel(pendingIntent)
-                pendingIntent.cancel()
-            }
+            cancelRequestCode(context, alarmManager, 4100 + idx)
+        }
+        cancelRequestCode(context, alarmManager, REQUEST_CODE_SUHOOR)
+    }
+
+    private fun cancelRequestCode(context: Context, alarmManager: AlarmManager, requestCode: Int) {
+        val intent = Intent(context, PrayerAlarmReceiver::class.java)
+        val pendingIntent = PendingIntent.getBroadcast(
+            context,
+            requestCode,
+            intent,
+            PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
+        )
+        if (pendingIntent != null) {
+            alarmManager.cancel(pendingIntent)
+            pendingIntent.cancel()
         }
     }
 
-    fun sendTestNotification(context: Context, sound: PrayerAlertSound, nextPrayerLabel: String) {
+    fun sendTestNotification(
+        context: Context,
+        sound: PrayerAlertSound,
+        nextPrayerLabel: String,
+        fajrFadeIn: Boolean = false
+    ) {
         ensureChannelsCreated(context)
         PrayerAlarmReceiver.postPrayerNotification(
             context = context,
@@ -177,7 +342,8 @@ object PrayerAlarmScheduler {
             prayerName = nextPrayerLabel,
             prayerTime = "Test Alert",
             leadMinutes = 0,
-            sound = sound
+            sound = sound,
+            isFajrFadeIn = fajrFadeIn
         )
     }
 }

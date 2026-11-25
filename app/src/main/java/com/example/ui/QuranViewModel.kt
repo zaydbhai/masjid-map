@@ -3,8 +3,8 @@ package com.example.ui
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.audio.QuranPlaybackController
 import com.example.data.BookmarksAndMasjidExtrasRepository
-import com.example.data.QuranAudioPlayer
 import com.example.data.QuranRepository
 import com.example.data.UserPreferencesRepository
 import com.example.domain.JuzCatalog
@@ -15,6 +15,7 @@ import com.example.domain.QuranSearchHit
 import com.example.domain.QuranTranslationOption
 import com.example.domain.QuranVerse
 import com.example.domain.RecitationLanguage
+import com.example.domain.SleepTimerOption
 import com.example.domain.SurahCatalog
 import com.example.domain.SurahContent
 import com.example.domain.SurahInfo
@@ -53,7 +54,7 @@ data class QuranUiState(
     val activeSurahContent: SurahContent? = null,
     val isLoadingSurah: Boolean = false,
     val errorMessage: String? = null,
-    // Audio Recitation State
+    // Audio Recitation & Sleep Timer State
     val playingSurah: Int? = null,
     val playingAyah: Int? = null,
     val isPlayingAudio: Boolean = false,
@@ -61,22 +62,30 @@ data class QuranUiState(
     val audioProgressFraction: Float = 0f,
     val playbackSpeed: Float = 1.0f,
     val autoAdvanceAyah: Boolean = true,
+    val sleepTimerOption: SleepTimerOption = SleepTimerOption.OFF,
+    val sleepTimerRemainingSec: Int = 0,
     val cachedAudioAyahsForActiveSurah: Int = 0,
+    val cachedAudioSurahNumbers: Set<Int> = emptySet(),
+    val cachedAudioReciterIds: Set<String> = emptySet(),
+    val audioCacheBytes: Long = 0L,
     val isDownloadingSurahAudio: Boolean = false,
     val surahAudioDownloadProgress: Int = 0,
+    val isDownloadingEssentialAudio: Boolean = false,
+    val essentialAudioProgressText: String? = null,
+    val essentialAudioProgressFraction: Float = 0f,
     val audioErrorMessage: String? = null
 )
 
 class QuranViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = QuranRepository(application)
-    private val audioPlayer = QuranAudioPlayer(application)
+    private val playbackController = QuranPlaybackController.getInstance(application)
+    private val audioPlayer = playbackController.audioPlayer
     private val prefs = UserPreferencesRepository(application)
     private val extrasRepo = BookmarksAndMasjidExtrasRepository.getInstance(application)
     private var verseSearchJob: Job? = null
-    private var playJob: Job? = null
-    private var audioProgressJob: Job? = null
     private var audioDownloadJob: Job? = null
+    private var essentialAudioDownloadJob: Job? = null
 
     private val _uiState = MutableStateFlow(
         QuranUiState(
@@ -95,6 +104,32 @@ class QuranViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         viewModelScope.launch {
+            playbackController.snapshot.collect { snap ->
+                val activeSurah = _uiState.value.activeSurahContent?.surah
+                val cachedAudioCount = if (activeSurah != null) {
+                    audioPlayer.getCachedAyahCount(_uiState.value.selectedReciter, activeSurah.number, activeSurah.ayahCount)
+                } else {
+                    _uiState.value.cachedAudioAyahsForActiveSurah
+                }
+                _uiState.update {
+                    it.copy(
+                        playingSurah = snap.playingSurah,
+                        playingAyah = snap.playingAyah,
+                        isPlayingAudio = snap.isPlaying,
+                        isBufferingAudio = snap.isBuffering,
+                        audioProgressFraction = snap.progressFraction,
+                        playbackSpeed = snap.playbackSpeed,
+                        autoAdvanceAyah = snap.autoAdvanceAyah,
+                        sleepTimerOption = snap.sleepTimerOption,
+                        sleepTimerRemainingSec = snap.sleepTimerRemainingSec,
+                        cachedAudioAyahsForActiveSurah = cachedAudioCount,
+                        audioErrorMessage = snap.errorMessage
+                    )
+                }
+            }
+        }
+
+        viewModelScope.launch {
             prefs.settingsFlow.collect { settings ->
                 val prev = _uiState.value.selectedTranslation
                 val cached = repository.getCachedSurahNumbers(settings.quranTranslation.editionId)
@@ -104,12 +139,16 @@ class QuranViewModel(application: Application) : AndroidViewModel(application) {
                 } else {
                     0
                 }
+                playbackController.setReciter(settings.quranReciter)
                 _uiState.update {
                     it.copy(
                         selectedTranslation = settings.quranTranslation,
                         selectedReciter = settings.quranReciter,
                         cachedSurahNumbers = cached,
                         cachedAudioAyahsForActiveSurah = cachedAudioCount,
+                        cachedAudioSurahNumbers = audioPlayer.getFullAudioCachedSurahNumbers(settings.quranReciter),
+                        cachedAudioReciterIds = audioPlayer.getCachedReciterIds(),
+                        audioCacheBytes = audioPlayer.getCacheSizeBytes(),
                         arabicOnlyMode = settings.arabicOnlyQuran,
                         lastReadSurah = settings.lastReadSurah,
                         lastReadAyah = settings.lastReadAyah,
@@ -178,6 +217,9 @@ class QuranViewModel(application: Application) : AndroidViewModel(application) {
             it.copy(
                 cachedSurahNumbers = cached,
                 cachedAudioAyahsForActiveSurah = cachedAudioCount,
+                cachedAudioSurahNumbers = audioPlayer.getFullAudioCachedSurahNumbers(current.selectedReciter),
+                cachedAudioReciterIds = audioPlayer.getCachedReciterIds(),
+                audioCacheBytes = audioPlayer.getCacheSizeBytes(),
                 surahs = filterSurahs(current.searchQuery, current.showOnlyOffline, cached)
             )
         }
@@ -223,16 +265,14 @@ class QuranViewModel(application: Application) : AndroidViewModel(application) {
             it.copy(
                 selectedReciter = reciter,
                 cachedAudioAyahsForActiveSurah = cachedCount,
+                cachedAudioSurahNumbers = audioPlayer.getFullAudioCachedSurahNumbers(reciter),
+                cachedAudioReciterIds = audioPlayer.getCachedReciterIds(),
+                audioCacheBytes = audioPlayer.getCacheSizeBytes(),
                 audioErrorMessage = null
             )
         }
+        playbackController.setReciter(reciter)
         viewModelScope.launch { prefs.setQuranReciter(reciter) }
-
-        val playingS = currentState.playingSurah
-        val playingA = currentState.playingAyah
-        if (playingS != null && playingA != null && (currentState.isPlayingAudio || currentState.isBufferingAudio)) {
-            playAyah(playingS, playingA, reciter)
-        }
     }
 
     fun selectRecitationLanguage(language: RecitationLanguage) {
@@ -243,89 +283,51 @@ class QuranViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun togglePlayAyah(surahNumber: Int, ayahNumber: Int) {
-        val state = _uiState.value
-        if (state.playingSurah == surahNumber && state.playingAyah == ayahNumber) {
-            if (state.isBufferingAudio) return
-            if (state.isPlayingAudio) {
-                audioPlayer.pause()
-                audioProgressJob?.cancel()
-                _uiState.update { it.copy(isPlayingAudio = false) }
-            } else {
-                audioPlayer.resume(state.playbackSpeed)
-                _uiState.update { it.copy(isPlayingAudio = true, audioErrorMessage = null) }
-                startProgressTicker()
-            }
-        } else {
-            playAyah(surahNumber, ayahNumber, state.selectedReciter)
-        }
+        playbackController.togglePlayAyah(surahNumber, ayahNumber, _uiState.value.selectedReciter)
     }
 
     fun togglePlayPauseSurah() {
         val state = _uiState.value
-        val activeSurah = state.activeSurahContent?.surah ?: return
-        if (state.playingSurah == activeSurah.number && state.playingAyah != null) {
-            togglePlayAyah(activeSurah.number, state.playingAyah)
+        val activeSurah = state.activeSurahContent?.surah
+        val fallbackSurah = activeSurah?.number ?: state.playingSurah
+        val fallbackAyah = if (activeSurah != null && state.lastReadSurah == activeSurah.number && state.lastReadAyah in 1..activeSurah.ayahCount) {
+            state.lastReadAyah
         } else {
-            val startAyah = if (state.lastReadSurah == activeSurah.number && state.lastReadAyah in 1..activeSurah.ayahCount) {
-                state.lastReadAyah
-            } else {
-                1
-            }
-            playAyah(activeSurah.number, startAyah, state.selectedReciter)
+            1
         }
+        playbackController.togglePlayPause(
+            fallbackSurah = fallbackSurah,
+            fallbackAyah = fallbackAyah,
+            reciter = state.selectedReciter
+        )
     }
 
     fun playNextAyah() {
-        val state = _uiState.value
-        val surahNum = state.playingSurah ?: state.activeSurahContent?.surah?.number ?: return
-        val info = SurahCatalog.byNumber(surahNum)
-        val currentAyah = state.playingAyah ?: 1
-        if (currentAyah < info.ayahCount) {
-            playAyah(surahNum, currentAyah + 1, state.selectedReciter)
-        }
+        playbackController.playNextAyah()
     }
 
     fun playPreviousAyah() {
-        val state = _uiState.value
-        val surahNum = state.playingSurah ?: state.activeSurahContent?.surah?.number ?: return
-        val currentAyah = state.playingAyah ?: 1
-        val prev = (currentAyah - 1).coerceAtLeast(1)
-        playAyah(surahNum, prev, state.selectedReciter)
+        playbackController.playPreviousAyah()
     }
 
     fun cyclePlaybackSpeed() {
-        val nextSpeed = when (_uiState.value.playbackSpeed) {
-            1.0f -> 1.25f
-            1.25f -> 1.5f
-            1.5f -> 0.75f
-            else -> 1.0f
-        }
-        audioPlayer.setSpeed(nextSpeed)
-        _uiState.update { it.copy(playbackSpeed = nextSpeed) }
+        playbackController.cycleSpeed()
     }
 
     fun toggleAutoAdvance() {
-        _uiState.update { it.copy(autoAdvanceAyah = !it.autoAdvanceAyah) }
+        playbackController.toggleAutoAdvance()
+    }
+
+    fun setSleepTimer(option: SleepTimerOption) {
+        playbackController.setSleepTimer(option)
     }
 
     fun stopAudio() {
-        playJob?.cancel()
-        audioProgressJob?.cancel()
-        audioPlayer.stop()
-        _uiState.update {
-            it.copy(
-                playingSurah = null,
-                playingAyah = null,
-                isPlayingAudio = false,
-                isBufferingAudio = false,
-                audioProgressFraction = 0f,
-                audioErrorMessage = null
-            )
-        }
+        playbackController.stopAudio()
     }
 
     fun clearAudioError() {
-        _uiState.update { it.copy(audioErrorMessage = null) }
+        playbackController.clearError()
     }
 
     fun downloadActiveSurahAudio() {
@@ -359,13 +361,19 @@ class QuranViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update {
                     it.copy(
                         isDownloadingSurahAudio = false,
-                        cachedAudioAyahsForActiveSurah = surah.ayahCount
+                        cachedAudioAyahsForActiveSurah = surah.ayahCount,
+                        cachedAudioSurahNumbers = audioPlayer.getFullAudioCachedSurahNumbers(reciter),
+                        cachedAudioReciterIds = audioPlayer.getCachedReciterIds(),
+                        audioCacheBytes = audioPlayer.getCacheSizeBytes()
                     )
                 }
             } catch (t: Throwable) {
                 _uiState.update {
                     it.copy(
                         isDownloadingSurahAudio = false,
+                        cachedAudioSurahNumbers = audioPlayer.getFullAudioCachedSurahNumbers(reciter),
+                        cachedAudioReciterIds = audioPlayer.getCachedReciterIds(),
+                        audioCacheBytes = audioPlayer.getCacheSizeBytes(),
                         audioErrorMessage = t.message ?: "Unable to download Surah audio. Check your connection."
                     )
                 }
@@ -373,102 +381,63 @@ class QuranViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun playAyah(
-        surahNumber: Int,
-        ayahNumber: Int,
-        reciter: QuranReciterOption
-    ) {
-        playJob?.cancel()
-        audioProgressJob?.cancel()
-        val surahInfo = SurahCatalog.byNumber(surahNumber)
-        val safeAyah = ayahNumber.coerceIn(1, surahInfo.ayahCount)
+    fun downloadEssentialAudioOffline(onComplete: () -> Unit = {}) {
+        val state = _uiState.value
+        val reciter = state.selectedReciter
+        if (state.isDownloadingEssentialAudio) return
 
-        playJob = viewModelScope.launch {
+        essentialAudioDownloadJob?.cancel()
+        essentialAudioDownloadJob = viewModelScope.launch {
             _uiState.update {
                 it.copy(
-                    playingSurah = surahNumber,
-                    playingAyah = safeAyah,
-                    isPlayingAudio = false,
-                    isBufferingAudio = true,
-                    audioProgressFraction = 0f,
+                    isDownloadingEssentialAudio = true,
+                    essentialAudioProgressText = "Preparing ${reciter.shortLabel} recitations…",
+                    essentialAudioProgressFraction = 0f,
                     audioErrorMessage = null
                 )
             }
             try {
-                val localFile = audioPlayer.ensureAyahAudioCached(reciter, surahNumber, safeAyah)
-                val cachedCount = _uiState.value.activeSurahContent?.surah?.let { active ->
-                    audioPlayer.getCachedAyahCount(reciter, active.number, active.ayahCount)
-                } ?: _uiState.value.cachedAudioAyahsForActiveSurah
-
-                _uiState.update { it.copy(cachedAudioAyahsForActiveSurah = cachedCount) }
-
-                audioPlayer.playLocalFile(
-                    file = localFile,
-                    speed = _uiState.value.playbackSpeed,
-                    onPrepared = {
-                        _uiState.update {
-                            it.copy(
-                                isBufferingAudio = false,
-                                isPlayingAudio = true,
-                                audioErrorMessage = null
-                            )
-                        }
-                        startProgressTicker()
-                    },
-                    onCompletion = {
-                        audioProgressJob?.cancel()
-                        val st = _uiState.value
-                        if (st.autoAdvanceAyah) {
-                            if (safeAyah < surahInfo.ayahCount) {
-                                playAyah(surahNumber, safeAyah + 1, st.selectedReciter)
-                            } else {
-                                _uiState.update {
-                                    it.copy(
-                                        isPlayingAudio = false,
-                                        audioProgressFraction = 1f
-                                    )
-                                }
-                            }
-                        } else {
-                            // Loop same ayah when auto-advance is disabled
-                            playAyah(surahNumber, safeAyah, st.selectedReciter)
-                        }
-                    },
-                    onError = { err ->
-                        audioProgressJob?.cancel()
-                        _uiState.update {
-                            it.copy(
-                                isBufferingAudio = false,
-                                isPlayingAudio = false,
-                                audioErrorMessage = err
-                            )
-                        }
+                audioPlayer.downloadEssentialSurahsAudioOffline(reciter) { done, total, surahName ->
+                    val frac = if (total > 0) done.toFloat() / total.toFloat() else 0f
+                    _uiState.update {
+                        it.copy(
+                            essentialAudioProgressText = "Downloading $surahName ($done / $total)…",
+                            essentialAudioProgressFraction = frac,
+                            cachedAudioSurahNumbers = audioPlayer.getFullAudioCachedSurahNumbers(reciter),
+                            cachedAudioReciterIds = audioPlayer.getCachedReciterIds(),
+                            audioCacheBytes = audioPlayer.getCacheSizeBytes()
+                        )
                     }
-                )
+                }
+                val activeSurah = _uiState.value.activeSurahContent?.surah
+                val activeCached = if (activeSurah != null) {
+                    audioPlayer.getCachedAyahCount(reciter, activeSurah.number, activeSurah.ayahCount)
+                } else {
+                    _uiState.value.cachedAudioAyahsForActiveSurah
+                }
+                _uiState.update {
+                    it.copy(
+                        isDownloadingEssentialAudio = false,
+                        essentialAudioProgressText = null,
+                        essentialAudioProgressFraction = 1f,
+                        cachedAudioAyahsForActiveSurah = activeCached,
+                        cachedAudioSurahNumbers = audioPlayer.getFullAudioCachedSurahNumbers(reciter),
+                        cachedAudioReciterIds = audioPlayer.getCachedReciterIds(),
+                        audioCacheBytes = audioPlayer.getCacheSizeBytes()
+                    )
+                }
+                onComplete()
             } catch (t: Throwable) {
                 _uiState.update {
                     it.copy(
-                        isBufferingAudio = false,
-                        isPlayingAudio = false,
-                        audioErrorMessage = t.message ?: "Unable to stream recitation audio offline."
+                        isDownloadingEssentialAudio = false,
+                        essentialAudioProgressText = null,
+                        cachedAudioSurahNumbers = audioPlayer.getFullAudioCachedSurahNumbers(reciter),
+                        cachedAudioReciterIds = audioPlayer.getCachedReciterIds(),
+                        audioCacheBytes = audioPlayer.getCacheSizeBytes(),
+                        errorMessage = t.message ?: "Unable to download audio pack while offline."
                     )
                 }
-            }
-        }
-    }
-
-    private fun startProgressTicker() {
-        audioProgressJob?.cancel()
-        audioProgressJob = viewModelScope.launch {
-            while (true) {
-                val dur = audioPlayer.durationMs()
-                val pos = audioPlayer.currentPositionMs()
-                if (dur > 0) {
-                    _uiState.update {
-                        it.copy(audioProgressFraction = (pos.toFloat() / dur.toFloat()).coerceIn(0f, 1f))
-                    }
-                }
-                delay(150L)
             }
         }
     }
@@ -584,10 +553,8 @@ class QuranViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         super.onCleared()
-        playJob?.cancel()
-        audioProgressJob?.cancel()
         audioDownloadJob?.cancel()
-        audioPlayer.release()
+        essentialAudioDownloadJob?.cancel()
+        // Note: playbackController stays alive so background/lock-screen playback continues!
     }
 }
-

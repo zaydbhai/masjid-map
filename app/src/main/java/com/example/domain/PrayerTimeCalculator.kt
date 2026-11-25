@@ -186,6 +186,60 @@ object PrayerTimeCalculator {
         )
     }
 
+    fun calculateNightWorshipWindows(
+        latitude: Double,
+        longitude: Double,
+        nowMillis: Long = System.currentTimeMillis(),
+        method: CalculationMethod = CalculationMethod.ISNA,
+        madhab: AsrMadhab = AsrMadhab.STANDARD,
+        timeZone: TimeZone = TimeZone.getDefault()
+    ): NightWorshipWindows {
+        val schedule = calculateSchedule(latitude, longitude, nowMillis, method, madhab, timeZone)
+        val formatter = SimpleDateFormat("h:mm a", Locale.getDefault()).apply {
+            this.timeZone = timeZone
+        }
+        val fajrToday = schedule.entries.first { it.name == PrayerName.FAJR }
+        val sunrise = schedule.entries.first { it.name == PrayerName.SUNRISE }
+        val maghrib = schedule.entries.first { it.name == PrayerName.MAGHRIB }
+        val tomorrowFajr = calculateTomorrowFajr(
+            latitude = latitude,
+            longitude = longitude,
+            tomorrowMillis = nowMillis + 86_400_000L,
+            method = method,
+            timeZone = timeZone,
+            formatter = formatter
+        )
+
+        val nightDurationMs = (tomorrowFajr.timeMillis - maghrib.timeMillis).coerceAtLeast(3_600_000L)
+        val midnightMs = maghrib.timeMillis + nightDurationMs / 2L
+        val lastThirdStartMs = tomorrowFajr.timeMillis - nightDurationMs / 3L
+        val duhaStartMs = sunrise.timeMillis + 20L * 60_000L
+
+        val (suhoorEntry, nextFastLabel, nextFastTargetMs) = when {
+            nowMillis < fajrToday.timeMillis -> {
+                Triple(fajrToday, "Suhoor Ends (Fajr)", fajrToday.timeMillis)
+            }
+            nowMillis < maghrib.timeMillis -> {
+                Triple(tomorrowFajr, "Iftar (Maghrib)", maghrib.timeMillis)
+            }
+            else -> {
+                Triple(tomorrowFajr, "Tomorrow Suhoor Ends", tomorrowFajr.timeMillis)
+            }
+        }
+
+        return NightWorshipWindows(
+            suhoorEndsFormatted = suhoorEntry.formattedTime,
+            suhoorEndsMillis = suhoorEntry.timeMillis,
+            duhaStartFormatted = formatter.format(Date(duhaStartMs)),
+            iftarFormatted = maghrib.formattedTime,
+            iftarMillis = maghrib.timeMillis,
+            midnightFormatted = formatter.format(Date(midnightMs)),
+            lastThirdStartFormatted = formatter.format(Date(lastThirdStartMs)),
+            nextFastEventLabel = nextFastLabel,
+            millisUntilFastEvent = (nextFastTargetMs - nowMillis).coerceAtLeast(0L)
+        )
+    }
+
     fun distanceMeters(from: LatLngPoint, to: LatLngPoint): Double {
         val lat1 = Math.toRadians(from.latitude)
         val lat2 = Math.toRadians(to.latitude)

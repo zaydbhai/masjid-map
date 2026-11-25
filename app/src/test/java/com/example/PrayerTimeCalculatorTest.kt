@@ -229,4 +229,212 @@ class PrayerTimeCalculatorTest {
         assertTrue(englishUrls.any { it.contains("en.walk/1.mp3") })
         assertTrue(englishUrls.any { it.contains("Ibrahim_Walk_192kbps/001001.mp3") })
     }
+
+    @Test
+    fun nightWorshipWindowsCalculateSuhoorIftarMidnightAndLastThird() {
+        val tz = TimeZone.getTimeZone("Asia/Karachi")
+        val cal = Calendar.getInstance(tz).apply {
+            set(2026, Calendar.MARCH, 15, 14, 0, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        val windows = PrayerTimeCalculator.calculateNightWorshipWindows(
+            latitude = 24.8607,
+            longitude = 67.0011,
+            nowMillis = cal.timeInMillis,
+            method = CalculationMethod.KARACHI,
+            madhab = AsrMadhab.HANAFI,
+            timeZone = tz
+        )
+
+        assertTrue(windows.suhoorEndsFormatted.isNotBlank())
+        assertTrue(windows.duhaStartFormatted.isNotBlank())
+        assertTrue(windows.iftarFormatted.isNotBlank())
+        assertTrue(windows.midnightFormatted.isNotBlank())
+        assertTrue(windows.lastThirdStartFormatted.isNotBlank())
+        assertEquals("Iftar (Maghrib)", windows.nextFastEventLabel)
+        assertTrue(windows.millisUntilFastEvent > 0L)
+        assertTrue(windows.suhoorEndsMillis > windows.iftarMillis)
+    }
+
+    @Test
+    fun zakatCalculatorComputesSilverAndGoldNisabPlusFitrAndFidyah() {
+        val silverNisab = com.example.domain.NisabStandard.SILVER
+        val above = com.example.domain.ZakatCalculator.compute(
+            cashAndBank = 5000.0,
+            goldAndSilverValue = 1000.0,
+            investmentsAndStocks = 2000.0,
+            businessInventory = 0.0,
+            receivables = 500.0,
+            shortTermDebts = 1500.0,
+            nisabStandard = silverNisab,
+            metalPricePerGram = 1.0
+        )
+        assertEquals(8500.0, above.totalAssets, 0.01)
+        assertEquals(7000.0, above.netZakatableWealth, 0.01)
+        assertEquals(612.36, above.nisabThreshold, 0.01)
+        assertTrue(above.meetsNisab)
+        assertEquals(175.0, above.zakatDue, 0.01)
+
+        val belowGold = com.example.domain.ZakatCalculator.compute(
+            cashAndBank = 4000.0,
+            goldAndSilverValue = 0.0,
+            investmentsAndStocks = 0.0,
+            businessInventory = 0.0,
+            receivables = 0.0,
+            shortTermDebts = 0.0,
+            nisabStandard = com.example.domain.NisabStandard.GOLD,
+            metalPricePerGram = 85.0
+        )
+        assertTrue(!belowGold.meetsNisab)
+        assertEquals(0.0, belowGold.zakatDue, 0.01)
+
+        val (fitr, fidyah) = com.example.domain.ZakatCalculator.computeFitrAndFidyah(
+            householdMembers = 4,
+            fitrRatePerPerson = 15.0,
+            missedFastingDays = 10,
+            fidyahRatePerDay = 12.0
+        )
+        assertEquals(60.0, fitr, 0.01)
+        assertEquals(120.0, fidyah, 0.01)
+    }
+
+    @Test
+    fun prayerLogStatusCyclesCleanlyAndCatalogIsPopulated() {
+        var s = com.example.domain.PrayerLogStatus.UNLOGGED
+        s = s.nextCycle()
+        assertEquals(com.example.domain.PrayerLogStatus.IN_MASJID, s)
+        s = s.nextCycle()
+        assertEquals(com.example.domain.PrayerLogStatus.ON_TIME, s)
+        s = s.nextCycle()
+        assertEquals(com.example.domain.PrayerLogStatus.LATE, s)
+        s = s.nextCycle()
+        assertEquals(com.example.domain.PrayerLogStatus.QADA, s)
+        s = s.nextCycle()
+        assertEquals(com.example.domain.PrayerLogStatus.UNLOGGED, s)
+
+        assertTrue(com.example.domain.IslamicGuidesCatalog.situationalDuas.size >= 9)
+        assertEquals(3, com.example.domain.IslamicGuidesCatalog.practicalGuides.size)
+    }
+
+    @Test
+    fun sleepTimerAndHighContrastTypographyWorkCorrectly() {
+        assertEquals(com.example.domain.SleepTimerOption.OFF, com.example.domain.SleepTimerOption.fromId("unknown"))
+        assertEquals(15, com.example.domain.SleepTimerOption.fromId("15m").durationMinutes)
+        assertEquals(30, com.example.domain.SleepTimerOption.fromId("30m").durationMinutes)
+        assertEquals(60, com.example.domain.SleepTimerOption.fromId("60m").durationMinutes)
+        assertEquals(
+            com.example.domain.SleepTimerOption.END_OF_SURAH,
+            com.example.domain.SleepTimerOption.fromId("end_of_surah")
+        )
+
+        val baseType = com.example.ui.theme.buildAppTypography(highContrast = false)
+        val highContrastType = com.example.ui.theme.buildAppTypography(highContrast = true)
+        assertTrue(highContrastType.bodyLarge.fontSize.value > baseType.bodyLarge.fontSize.value)
+        assertTrue(highContrastType.headlineMedium.fontSize.value > baseType.headlineMedium.fontSize.value)
+    }
+
+    @Test
+    fun nominatimAndPhotonFallbacksParseAndDeduplicateNearbyMasjids() {
+        val home = LatLngPoint(24.8607, 67.0011)
+        val nomResults = listOf(
+            com.example.data.NominatimResult(
+                osmType = "way",
+                osmId = 501L,
+                lat = "24.8620",
+                lon = "67.0020",
+                name = "Masjid Al-Falah",
+                displayName = "Masjid Al-Falah, Saddar, Karachi",
+                category = "amenity",
+                type = "place_of_worship",
+                extratags = mapOf("religion" to "muslim", "wheelchair" to "yes")
+            ),
+            com.example.data.NominatimResult(
+                osmType = "node",
+                osmId = 502L,
+                lat = "24.8700",
+                lon = "67.0100",
+                name = "Random Coffee Shop",
+                displayName = "Random Coffee Shop, Karachi",
+                category = "amenity",
+                type = "cafe"
+            )
+        )
+        val parsedNom = com.example.data.MasjidRepository.parseNominatimPoiResults(
+            results = nomResults,
+            center = home,
+            referenceForDistance = home,
+            maxRadiusMeters = 10_000.0,
+            nowMillis = System.currentTimeMillis(),
+            method = CalculationMethod.KARACHI,
+            madhab = AsrMadhab.HANAFI
+        )
+        assertEquals(1, parsedNom.size)
+        assertEquals("Masjid Al-Falah", parsedNom.first().name)
+        assertEquals(true, parsedNom.first().wheelchairAccessible)
+
+        val photonFeatures = listOf(
+            com.example.data.PhotonFeature(
+                geometry = com.example.data.PhotonGeometry(coordinates = listOf(67.00205, 24.86205)),
+                properties = com.example.data.PhotonProperties(
+                    osmId = 901L,
+                    osmType = "N",
+                    osmKey = "amenity",
+                    osmValue = "place_of_worship",
+                    name = "Masjid Al Falah",
+                    city = "Karachi"
+                )
+            ),
+            com.example.data.PhotonFeature(
+                geometry = com.example.data.PhotonGeometry(coordinates = listOf(67.0150, 24.8680)),
+                properties = com.example.data.PhotonProperties(
+                    osmId = 902L,
+                    osmType = "N",
+                    osmKey = "amenity",
+                    osmValue = "place_of_worship",
+                    name = "Jamia Masjid Noor",
+                    city = "Karachi"
+                )
+            )
+        )
+        val parsedPhoton = com.example.data.MasjidRepository.parsePhotonFeatures(
+            features = photonFeatures,
+            center = home,
+            referenceForDistance = home,
+            maxRadiusMeters = 10_000.0,
+            nowMillis = System.currentTimeMillis(),
+            method = CalculationMethod.KARACHI,
+            madhab = AsrMadhab.HANAFI
+        )
+        assertEquals(2, parsedPhoton.size)
+
+        val merged = com.example.data.MasjidRepository.mergeAndDeduplicateMasjids(parsedNom + parsedPhoton)
+        assertEquals(2, merged.size)
+        assertEquals("Masjid Al-Falah", merged.first().name)
+        assertEquals("Jamia Masjid Noor", merged.last().name)
+    }
+
+    @Test
+    fun offlineMapTileCacheAndEssentialAudioSetCoverZoomLevelsAndDailySurahs() {
+        val center = LatLngPoint(37.7749, -122.4194)
+        val tiles = com.example.data.OfflineMapTileCache.buildCenterPrioritizedTiles(
+            center = center,
+            radiusKm = 3.0,
+            minZoom = 12,
+            maxZoom = 16,
+            maxTiles = 420
+        )
+        assertTrue(tiles.isNotEmpty())
+        assertTrue(tiles.size <= 420)
+        val zooms = tiles.map { org.osmdroid.util.MapTileIndex.getZoom(it) }.toSet()
+        assertTrue(zooms.contains(12))
+        assertTrue(zooms.contains(15))
+
+        val essential = com.example.data.QuranAudioPlayer.ESSENTIAL_AUDIO_SURAH_NUMBERS
+        assertEquals(43, essential.size)
+        assertTrue(essential.contains(1))
+        assertTrue(essential.contains(18))
+        assertTrue(essential.contains(36))
+        assertTrue(essential.contains(67))
+        assertTrue((78..114).all { essential.contains(it) })
+    }
 }

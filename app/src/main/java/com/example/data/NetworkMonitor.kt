@@ -51,13 +51,15 @@ class NetworkMonitor(context: Context) {
         val active = cm.activeNetwork ?: return false
         val caps = cm.getNetworkCapabilities(active) ?: return false
         val hasInternet = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-        if (!hasInternet) return false
+        val notCaptive = !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL)
+        if (!hasInternet || !notCaptive) return false
         if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) return true
-        val hasTransport = caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+        val hasKnownTransport = caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
             caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ||
             caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) ||
             caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
-        val notCaptive = !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL)
-        return hasTransport && notCaptive
+        if (hasKnownTransport) return true
+        @Suppress("DEPRECATION")
+        return cm.activeNetworkInfo?.isConnected == true
     }
 }

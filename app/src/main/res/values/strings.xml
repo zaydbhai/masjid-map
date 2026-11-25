@@ -17,4 +17,5 @@
     <string name="search_city_instead">Search by city or address instead</string>
     <string name="widget_name">Masjid Map · Prayer &amp; Tools</string>
     <string name="widget_description">Compact customizable prayer countdown, Qibla bearing, Tasbeeh +1, Qur\'an resume, and Hijri calendar.</string>
+    <string name="qs_tile_next_prayer">Next Prayer</string>
 </resources>
