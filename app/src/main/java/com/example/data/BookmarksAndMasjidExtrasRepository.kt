@@ -2,7 +2,10 @@ package com.example.data
 
 import android.content.Context
 import com.example.domain.HadithEntry
+import com.example.domain.HomeMasjidSnapshot
 import com.example.domain.JumuahTimes
+import com.example.domain.LatLngPoint
+import com.example.domain.Masjid
 import com.example.domain.PrayerName
 import com.example.domain.QuranBookmark
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -32,6 +35,32 @@ class BookmarksAndMasjidExtrasRepository private constructor(context: Context) {
 
     private val _jumuahByMasjid = MutableStateFlow(loadJumuahMap())
     val jumuahByMasjid: StateFlow<Map<String, JumuahTimes>> = _jumuahByMasjid.asStateFlow()
+
+    private val _homeMasjid = MutableStateFlow(loadHomeMasjid())
+    val homeMasjid: StateFlow<HomeMasjidSnapshot?> = _homeMasjid.asStateFlow()
+
+    fun setHomeMasjid(masjid: Masjid) {
+        val snapshot = HomeMasjidSnapshot(
+            id = masjid.id,
+            name = masjid.name,
+            address = masjid.address,
+            location = masjid.location
+        )
+        val json = JSONObject().apply {
+            put("id", snapshot.id)
+            put("name", snapshot.name)
+            put("address", snapshot.address)
+            put("lat", snapshot.location.latitude)
+            put("lng", snapshot.location.longitude)
+        }
+        prefs.edit().putString(KEY_HOME_MASJID, json.toString()).apply()
+        _homeMasjid.value = snapshot
+    }
+
+    fun clearHomeMasjid() {
+        prefs.edit().remove(KEY_HOME_MASJID).apply()
+        _homeMasjid.value = null
+    }
 
     fun toggleFavoriteMasjid(masjidId: String): Boolean {
         val next = _favoriteMasjidIds.value.toMutableSet()
@@ -273,12 +302,26 @@ class BookmarksAndMasjidExtrasRepository private constructor(context: Context) {
         prefs.edit().putString(KEY_JUMUAH_TIMES, root.toString()).apply()
     }
 
+    private fun loadHomeMasjid(): HomeMasjidSnapshot? {
+        val raw = prefs.getString(KEY_HOME_MASJID, null) ?: return null
+        return runCatching {
+            val obj = JSONObject(raw)
+            val id = obj.getString("id")
+            val name = obj.getString("name")
+            val address = obj.optString("address")
+            val lat = obj.getDouble("lat")
+            val lng = obj.getDouble("lng")
+            HomeMasjidSnapshot(id, name, address, LatLngPoint(lat, lng))
+        }.getOrNull()
+    }
+
     companion object {
         private const val KEY_FAVORITE_MASJIDS = "favorite_masjid_ids"
         private const val KEY_IQAMAH_TIMES = "iqamah_times_json"
         private const val KEY_JUMUAH_TIMES = "jumuah_times_json"
         private const val KEY_QURAN_BOOKMARKS = "quran_bookmarks_json"
         private const val KEY_HADITH_BOOKMARKS = "hadith_bookmarks_json"
+        private const val KEY_HOME_MASJID = "home_masjid_json"
 
         @Volatile
         private var instance: BookmarksAndMasjidExtrasRepository? = null

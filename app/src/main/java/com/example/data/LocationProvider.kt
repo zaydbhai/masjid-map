@@ -16,12 +16,18 @@ import androidx.core.content.ContextCompat
 import com.example.domain.LatLngPoint
 import com.google.android.gms.common.ConnectionResult
 import com.google.android.gms.common.GoogleApiAvailability
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -125,6 +131,72 @@ class LocationProvider(
         // 3. Fallback to any last-known fix regardless of age (GPS works completely offline!)
         val fallbackKnown = lastKnown ?: getBestLastKnownLocation(hasGms = hasGms, timeoutMs = 800L)
         return fallbackKnown?.let { LatLngPoint(it.latitude, it.longitude) }
+    }
+
+    @SuppressLint("MissingPermission")
+    fun locationUpdatesFlow(intervalMs: Long = 3_000L): Flow<LatLngPoint> = callbackFlow {
+        if (!hasLocationPermission()) {
+            close()
+            return@callbackFlow
+        }
+
+        val hasGms = isPlayServicesAvailable()
+        var fusedCallback: LocationCallback? = null
+        var frameworkListener: LocationListener? = null
+        val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+
+        if (hasGms) {
+            val req = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, intervalMs)
+                .setMinUpdateIntervalMillis((intervalMs / 2L).coerceAtLeast(1_000L))
+                .setMinUpdateDistanceMeters(4f)
+                .build()
+            val cb = object : LocationCallback() {
+                override fun onLocationResult(result: LocationResult) {
+                    val loc = result.lastLocation ?: return
+                    trySend(LatLngPoint(loc.latitude, loc.longitude))
+                }
+            }
+            fusedCallback = cb
+            runCatching {
+                fusedClient.requestLocationUpdates(req, cb, Looper.getMainLooper())
+            }
+        }
+
+        // Also register framework GPS/Network updates so offline & de-Googled devices stream reliably
+        if (lm != null) {
+            val fineGranted = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+            val listener = object : LocationListener {
+                override fun onLocationChanged(location: Location) {
+                    trySend(LatLngPoint(location.latitude, location.longitude))
+                }
+                @Deprecated("Deprecated in Java")
+                override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) = Unit
+                override fun onProviderEnabled(provider: String) = Unit
+                override fun onProviderDisabled(provider: String) = Unit
+            }
+            frameworkListener = listener
+            val providers = listOfNotNull(
+                if (fineGranted && runCatching { lm.isProviderEnabled(LocationManager.GPS_PROVIDER) }.getOrDefault(false)) {
+                    LocationManager.GPS_PROVIDER
+                } else null,
+                if (runCatching { lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER) }.getOrDefault(false)) {
+                    LocationManager.NETWORK_PROVIDER
+                } else null
+            )
+            providers.forEach { provider ->
+                runCatching {
+                    lm.requestLocationUpdates(provider, intervalMs, 4f, listener, Looper.getMainLooper())
+                }
+            }
+        }
+
+        awaitClose {
+            fusedCallback?.let { cb -> runCatching { fusedClient.removeLocationUpdates(cb) } }
+            frameworkListener?.let { l -> runCatching { lm?.removeUpdates(l) } }
+        }
     }
 
     @SuppressLint("MissingPermission")

@@ -27,6 +27,7 @@ import androidx.compose.material.icons.automirrored.filled.Accessible
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Explore
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LocalParking
 import androidx.compose.material.icons.filled.Navigation
@@ -34,6 +35,7 @@ import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarOutline
+import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Mosque
 import androidx.compose.material.icons.outlined.NightsStay
 import androidx.compose.material.icons.outlined.Schedule
@@ -84,9 +86,11 @@ fun PrayerTimesSheet(
     masjid: Masjid,
     travelMode: TravelMode,
     isFavorite: Boolean,
+    isHomeMasjid: Boolean,
     iqamahTimes: Map<PrayerName, String>,
     jumuahTimes: JumuahTimes,
     onToggleFavorite: () -> Unit,
+    onToggleHomeMasjid: () -> Unit,
     onSaveIqamahTimes: (Map<PrayerName, String>) -> Unit,
     onSaveJumuahTimes: (String, String) -> Unit,
     onClearIqamahTimes: () -> Unit,
@@ -312,6 +316,43 @@ fun PrayerTimesSheet(
                             tint = if (isFavorite) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+                }
+            }
+
+            // Pin / Unpin as Home Masjid
+            if (isHomeMasjid) {
+                FilledTonalButton(
+                    onClick = onToggleHomeMasjid,
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("sheet_home_masjid_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Home,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Home Masjid (Pinned · Synced to Widget)")
+                }
+            } else {
+                OutlinedButton(
+                    onClick = onToggleHomeMasjid,
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("sheet_home_masjid_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Home,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Pin as Home Masjid (Sync Iqamah & Leave Alerts)")
                 }
             }
 

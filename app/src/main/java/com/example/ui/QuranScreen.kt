@@ -1,7 +1,10 @@
 package com.example.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -16,6 +19,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -37,9 +41,11 @@ import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.OfflinePin
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
@@ -51,6 +57,7 @@ import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.outlined.Bedtime
+import com.example.ui.components.TappableTajwidArabicText
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -71,8 +78,10 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -88,6 +97,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.domain.JuzCatalog
 import com.example.domain.JuzInfo
 import com.example.domain.QuranBookmark
 import com.example.domain.QuranReciterOption
@@ -101,6 +111,7 @@ import com.example.domain.SurahContent
 import com.example.domain.SurahInfo
 import com.example.ui.theme.LocalReadingTypography
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.launch
 import java.util.Locale
 
 @Composable
@@ -119,7 +130,7 @@ fun QuranScreen(
         state.bookmarks.map { it.chapter to it.verse }.toSet()
     }
 
-    BackHandler(enabled = state.activeSurahContent != null) {
+    BackHandler(enabled = state.activeSurahContent != null && !state.isListeningPageVisible) {
         quranViewModel.closeSurah()
     }
 
@@ -450,6 +461,7 @@ fun QuranScreen(
                     bookmarkedKeys = bookmarkedKeys,
                     onBack = quranViewModel::closeSurah,
                     onToggleArabicOnly = quranViewModel::toggleArabicOnlyMode,
+                    onToggleTajwid = quranViewModel::toggleTajwidEnabled,
                     onToggleBookmark = { verse -> quranViewModel.toggleBookmark(activeSurah.surah, verse) },
                     onAyahVisible = { ayahNum -> quranViewModel.markAyahRead(activeSurah.surah.number, ayahNum) },
                     onSelectTranslation = quranViewModel::selectTranslation,
@@ -462,12 +474,15 @@ fun QuranScreen(
                     onClearReaderError = quranViewModel::clearError,
                     onOpenSettings = onOpenSettings,
                     onOpenSurah = { num -> quranViewModel.openSurah(num) },
+                    onJumpToJuz = { juz -> quranViewModel.openSurah(juz.startSurah, initialAyah = juz.startAyah) },
+                    onWordTap = { verse, idx, word -> quranViewModel.inspectArabicWord(verse, idx, word) },
+                    onCopyVerse = { verse -> copyQuranVerse(context, activeSurah.surah, verse, activeSurah.translation) },
                     onShareVerse = { verse -> shareQuranVerse(context, activeSurah.surah, verse, activeSurah.translation) }
                 )
             }
         }
 
-        // Persistent Mini-Player across both Surah Index & Surah Reader
+        // Persistent Mini-Player across both Surah Index & Surah Reader (tap opens Listening page)
         if (state.playingSurah != null && state.playingAyah != null) {
             RecitationMiniPlayer(
                 playingSurah = state.playingSurah!!,
@@ -481,13 +496,7 @@ fun QuranScreen(
                 sleepTimerOption = state.sleepTimerOption,
                 sleepTimerRemainingSec = state.sleepTimerRemainingSec,
                 borderColor = borderColor,
-                onOpenPlayingSurah = {
-                    val s = state.playingSurah ?: return@RecitationMiniPlayer
-                    val a = state.playingAyah ?: 1
-                    if (state.activeSurahContent?.surah?.number != s) {
-                        quranViewModel.openSurah(s, initialAyah = a)
-                    }
-                },
+                onOpenPlayingSurah = quranViewModel::openListeningPage,
                 onPrevAyah = quranViewModel::playPreviousAyah,
                 onTogglePlayPause = quranViewModel::togglePlayPauseSurah,
                 onNextAyah = quranViewModel::playNextAyah,
@@ -778,6 +787,7 @@ private fun SurahReaderView(
     bookmarkedKeys: Set<Pair<Int, Int>>,
     onBack: () -> Unit,
     onToggleArabicOnly: () -> Unit,
+    onToggleTajwid: () -> Unit,
     onToggleBookmark: (QuranVerse) -> Unit,
     onAyahVisible: (Int) -> Unit,
     onSelectTranslation: (QuranTranslationOption) -> Unit,
@@ -790,17 +800,31 @@ private fun SurahReaderView(
     onClearReaderError: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenSurah: (Int) -> Unit,
+    onJumpToJuz: (JuzInfo) -> Unit,
+    onWordTap: (QuranVerse, Int, String) -> Unit,
+    onCopyVerse: (QuranVerse) -> Unit,
     onShareVerse: (QuranVerse) -> Unit
 ) {
     val reading = LocalReadingTypography.current
     val surah = content.surah
     val listState = rememberLazyListState()
+    val coroutineScope = rememberCoroutineScope()
+    var visibleAyah by remember(content.surah.number) {
+        mutableIntStateOf(uiState.targetScrollAyah.coerceAtLeast(1))
+    }
+    val currentJuz = remember(surah.number, visibleAyah) {
+        JuzCatalog.juzForAyah(surah.number, visibleAyah)
+    }
 
     LaunchedEffect(content.surah.number, uiState.targetScrollAyah) {
-        if (uiState.targetScrollAyah > 1 && content.verses.isNotEmpty()) {
-            val verseIdx = content.verses.indexOfFirst { it.verse >= uiState.targetScrollAyah }
-            if (verseIdx >= 0) {
-                listState.scrollToItem(verseIdx + 1)
+        if (content.verses.isNotEmpty()) {
+            if (uiState.targetScrollAyah <= 1) {
+                listState.scrollToItem(0)
+            } else {
+                val verseIdx = content.verses.indexOfFirst { it.verse >= uiState.targetScrollAyah }
+                if (verseIdx >= 0) {
+                    listState.scrollToItem(verseIdx + 1)
+                }
             }
         }
     }
@@ -824,6 +848,7 @@ private fun SurahReaderView(
             .collect { idx ->
                 val verseIndex = (idx - 1).coerceAtLeast(0)
                 val ayah = content.verses.getOrNull(verseIndex)?.verse ?: 1
+                visibleAyah = ayah
                 onAyahVisible(ayah)
             }
     }
@@ -950,6 +975,19 @@ private fun SurahReaderView(
                             onSelect = onSelectReciter
                         )
 
+                        JuzQuickJumpButton(
+                            currentJuz = currentJuz,
+                            onJumpToJuz = { juz ->
+                                if (juz.startSurah == surah.number) {
+                                    val idx = content.verses.indexOfFirst { it.verse >= juz.startAyah }
+                                    if (idx >= 0) {
+                                        coroutineScope.launch { listState.scrollToItem(idx + 1) }
+                                    }
+                                }
+                                onJumpToJuz(juz)
+                            }
+                        )
+
                         val isThisSurahPlaying = uiState.playingSurah == surah.number && uiState.isPlayingAudio
                         FilledTonalButton(
                             onClick = onTogglePlayPauseSurah,
@@ -991,6 +1029,20 @@ private fun SurahReaderView(
                                 }
                             )
                         }
+
+                        FilterChip(
+                            selected = uiState.tajwidEnabled,
+                            onClick = onToggleTajwid,
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Filled.Palette,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            },
+                            label = { Text("Tajwid") },
+                            modifier = Modifier.testTag("quran_tajwid_toggle")
+                        )
                     }
 
                     if (uiState.isDownloadingSurahAudio) {
@@ -1228,8 +1280,23 @@ private fun SurahReaderView(
                                     )
                                 }
                                 IconButton(
+                                    onClick = { onCopyVerse(verse) },
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .testTag("copy_ayah_${verse.verse}")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.ContentCopy,
+                                        contentDescription = "Copy Ayah ${verse.chapter}:${verse.verse}",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                                IconButton(
                                     onClick = { onShareVerse(verse) },
-                                    modifier = Modifier.size(48.dp)
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .testTag("share_ayah_${verse.verse}")
                                 ) {
                                     Icon(
                                         imageVector = Icons.Filled.Share,
@@ -1241,13 +1308,15 @@ private fun SurahReaderView(
                             }
                         }
 
-                        Text(
-                            text = verse.arabicText,
+                        TappableTajwidArabicText(
+                            arabicText = verse.arabicText,
+                            tajwidEnabled = uiState.tajwidEnabled,
                             fontFamily = reading.arabicFontFamily,
                             fontSize = reading.arabicFontSizeSp.sp,
                             lineHeight = (reading.arabicFontSizeSp * 1.68f).sp,
-                            textAlign = TextAlign.End,
-                            color = MaterialTheme.colorScheme.onSurface,
+                            onWordTap = { wordIdx, surfaceWord ->
+                                onWordTap(verse, wordIdx, surfaceWord)
+                            },
                             modifier = Modifier.fillMaxWidth()
                         )
 
@@ -1701,19 +1770,102 @@ private fun TranslationDropdownButton(
     }
 }
 
-private fun shareQuranVerse(
+@Composable
+private fun JuzQuickJumpButton(
+    currentJuz: JuzInfo,
+    onJumpToJuz: (JuzInfo) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Box {
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.primaryContainer,
+            modifier = Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .clickable { expanded = true }
+                .testTag("quran_juz_quick_jump")
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = "Juz ${currentJuz.number}",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+            }
+        }
+
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.heightIn(max = 360.dp)
+        ) {
+            JuzCatalog.allJuz.forEach { juz ->
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(
+                                text = "Juz ${juz.number} · ${juz.nameEnglish}",
+                                fontWeight = if (juz.number == currentJuz.number) FontWeight.Bold else FontWeight.Normal
+                            )
+                            Text(
+                                text = "Starts ${SurahCatalog.byNumber(juz.startSurah).nameEnglish} (${juz.startSurah}:${juz.startAyah})",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    },
+                    onClick = {
+                        expanded = false
+                        onJumpToJuz(juz)
+                    },
+                    modifier = Modifier.testTag("juz_jump_item_${juz.number}")
+                )
+            }
+        }
+    }
+}
+
+private fun formatQuranVerseText(
+    surah: SurahInfo,
+    verse: QuranVerse,
+    translation: QuranTranslationOption
+): String = buildString {
+    appendLine(verse.arabicText)
+    appendLine()
+    appendLine("\"${verse.englishText}\"")
+    appendLine()
+    append("— Qur'an ${surah.nameEnglish} (${verse.chapter}:${verse.verse}), ${translation.displayName}")
+}
+
+internal fun copyQuranVerse(
     context: Context,
     surah: SurahInfo,
     verse: QuranVerse,
     translation: QuranTranslationOption
 ) {
-    val body = buildString {
-        appendLine(verse.arabicText)
-        appendLine()
-        appendLine("\"${verse.englishText}\"")
-        appendLine()
-        append("— Qur'an ${surah.nameEnglish} (${verse.chapter}:${verse.verse}), ${translation.displayName}")
-    }
+    val body = formatQuranVerseText(surah, verse, translation)
+    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+    cm?.setPrimaryClip(ClipData.newPlainText("Qur'an ${verse.chapter}:${verse.verse}", body))
+    Toast.makeText(
+        context,
+        "Copied ${surah.nameEnglish} ${verse.chapter}:${verse.verse}",
+        Toast.LENGTH_SHORT
+    ).show()
+}
+
+internal fun shareQuranVerse(
+    context: Context,
+    surah: SurahInfo,
+    verse: QuranVerse,
+    translation: QuranTranslationOption
+) {
+    val body = formatQuranVerseText(surah, verse, translation)
     val intent = Intent(Intent.ACTION_SEND).apply {
         type = "text/plain"
         putExtra(Intent.EXTRA_TEXT, body)

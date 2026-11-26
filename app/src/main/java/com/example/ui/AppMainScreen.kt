@@ -54,16 +54,20 @@ import com.example.domain.Masjid
 import com.example.domain.PrayerAlertSound
 import com.example.domain.PrayerName
 import com.example.domain.PrayerTimeCalculator
+import com.example.domain.SurahCatalog
 import com.example.ui.components.AdhkarTasbeehSheet
 import com.example.ui.components.DuasAndGuidesSheet
 import com.example.ui.components.HijriCalendarDialog
 import com.example.ui.components.OfflinePackSheet
 import com.example.ui.components.PrayerTimesSheet
 import com.example.ui.components.QiblaCompassSheet
+import com.example.ui.components.QuranListeningPage
+import com.example.ui.components.QuranWordAnalysisSheet
 import com.example.ui.components.SettingsSheet
 import com.example.ui.components.WidgetCustomizerSheet
 import com.example.ui.components.WorshipAndRamadanSheet
 import com.example.ui.components.ZakatCalculatorSheet
+import com.example.ui.theme.LocalReadingTypography
 
 @Composable
 fun AppMainScreen(
@@ -255,6 +259,10 @@ fun AppMainScreen(
                                 masjidViewModel.selectTab(MainTab.QURAN)
                                 quranViewModel.openSurah(surah, initialAyah = ayah)
                             },
+                            onOpenSurah = { surah ->
+                                masjidViewModel.selectTab(MainTab.QURAN)
+                                quranViewModel.openSurah(surah)
+                            },
                             onToggleHadithBookmark = masjidViewModel::toggleHadithOfTheDayBookmark,
                             onSelectMasjidFromHome = { masjid, showTimes ->
                                 masjidViewModel.selectMasjid(masjid, switchToMap = true)
@@ -263,6 +271,15 @@ fun AppMainScreen(
                                     masjidViewModel.openPrayerSheet(masjid)
                                 }
                             },
+                            onOpenHomeMasjidTimes = {
+                                masjidViewModel.openHomeMasjidOnMap(openTimes = true)
+                            },
+                            onNavigateToHomeMasjid = {
+                                masjidViewModel.openHomeMasjidOnMap(startRoute = true)
+                            },
+                            onExitGeofenceQuietMode = masjidViewModel::exitMasjidQuietMode,
+                            onShiftPrayerDate = masjidViewModel::shiftHomeDate,
+                            onResetPrayerDate = masjidViewModel::resetHomeDateToToday,
                             onNavigateTab = masjidViewModel::selectTab
                         )
 
@@ -298,9 +315,11 @@ fun AppMainScreen(
             masjid = masjid,
             travelMode = state.travelMode,
             isFavorite = state.favoriteMasjidIds.contains(masjid.id),
+            isHomeMasjid = state.homeMasjid?.id == masjid.id,
             iqamahTimes = masjidIqamah,
             jumuahTimes = masjidJumuah,
             onToggleFavorite = { masjidViewModel.toggleFavoriteMasjid(masjid.id) },
+            onToggleHomeMasjid = { masjidViewModel.toggleHomeMasjid(masjid) },
             onSaveIqamahTimes = { map -> masjidViewModel.saveIqamahTimes(masjid.id, map) },
             onSaveJumuahTimes = { first, second -> masjidViewModel.saveJumuahTimes(masjid.id, first, second) },
             onClearIqamahTimes = { masjidViewModel.clearIqamahTimes(masjid.id) },
@@ -353,6 +372,11 @@ fun AppMainScreen(
             suhoorLeadMinutes = state.suhoorLeadMinutes,
             persistentCountdownNotification = state.persistentCountdownNotification,
             autoDndAtPrayer = state.autoDndAtPrayer,
+            leaveForMasjidReminderEnabled = state.leaveForMasjidReminderEnabled,
+            leaveForMasjidPrepMinutes = state.leaveForMasjidPrepMinutes,
+            masjidGeofenceDndEnabled = state.masjidGeofenceDndEnabled,
+            tajwidEnabled = state.tajwidEnabled,
+            hasHomeMasjid = state.homeMasjid != null,
             isDownloadingAdhan = state.isDownloadingAdhan,
             cachedAdhanIds = state.cachedAdhanIds,
             onSelectMethod = masjidViewModel::updateCalculationMethod,
@@ -382,6 +406,13 @@ fun AppMainScreen(
                 else masjidViewModel.setPersistentCountdownNotification(false)
             },
             onToggleAutoDnd = masjidViewModel::setAutoDndAtPrayer,
+            onToggleLeaveForMasjid = { enable ->
+                if (enable) ensureNotifPermissionThen { masjidViewModel.setLeaveForMasjidReminderEnabled(true) }
+                else masjidViewModel.setLeaveForMasjidReminderEnabled(false)
+            },
+            onSelectLeavePrepMinutes = masjidViewModel::setLeaveForMasjidPrepMinutes,
+            onToggleMasjidGeofenceDnd = masjidViewModel::setMasjidGeofenceDndEnabled,
+            onToggleTajwid = masjidViewModel::setTajwidEnabled,
             onPreviewAdhan = masjidViewModel::downloadAndPreviewAdhan,
             onStopAdhan = masjidViewModel::stopAdhanPreview,
             onSendTestNotification = {
@@ -525,7 +556,10 @@ fun AppMainScreen(
             recentDateKeys = recentKeys,
             suhoorReminderEnabled = state.suhoorReminderEnabled,
             suhoorLeadMinutes = state.suhoorLeadMinutes,
+            tahajjudAlarmEnabled = state.tahajjudAlarmEnabled,
+            tahajjudOffsetMinutes = state.tahajjudOffsetMinutes,
             onCyclePrayerStatus = masjidViewModel::cyclePrayerLogStatus,
+            onAdjustQadaCount = masjidViewModel::adjustQadaCount,
             onToggleFastedToday = masjidViewModel::toggleFastedToday,
             onToggleSuhoorReminder = { enable ->
                 if (enable && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
@@ -537,6 +571,16 @@ fun AppMainScreen(
                 }
             },
             onSelectSuhoorLead = masjidViewModel::setSuhoorLeadMinutes,
+            onToggleTahajjudAlarm = { enable ->
+                if (enable && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                ) {
+                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                } else {
+                    masjidViewModel.setTahajjudAlarmEnabled(enable)
+                }
+            },
+            onSelectTahajjudOffset = masjidViewModel::setTahajjudOffsetMinutes,
             onSetKhatamGoalDays = masjidViewModel::setKhatamGoalDays,
             onAddKhatamPages = masjidViewModel::addKhatamPages,
             onResetKhatam = masjidViewModel::resetKhatamProgress,
@@ -557,6 +601,59 @@ fun AppMainScreen(
     // Searchable Situational Sunnah Duas & Practical Wudu/Salah/Umrah Guides Sheet
     if (state.showDuasSheet) {
         DuasAndGuidesSheet(onDismiss = masjidViewModel::closeDuasSheet)
+    }
+
+    // Dedicated Full-Screen Qur'an Listening Page (opens automatically when recitation starts)
+    if (quranState.isListeningPageVisible && quranState.playingSurah != null) {
+        val playingSurahNum = quranState.playingSurah!!
+        val playingAyahNum = quranState.playingAyah ?: 1
+        val isBookmarked = quranState.bookmarks.any {
+            it.chapter == playingSurahNum && it.verse == playingAyahNum
+        }
+        QuranListeningPage(
+            uiState = quranState,
+            isBookmarked = isBookmarked,
+            onMinimize = quranViewModel::closeListeningPage,
+            onOpenReaderAtPlayingAyah = { s, a ->
+                quranViewModel.closeListeningPage()
+                masjidViewModel.selectTab(MainTab.QURAN)
+                quranViewModel.openSurah(s, initialAyah = a)
+            },
+            onTogglePlayPause = quranViewModel::togglePlayPauseSurah,
+            onPrevAyah = quranViewModel::playPreviousAyah,
+            onNextAyah = quranViewModel::playNextAyah,
+            onSeekFraction = quranViewModel::seekAudioFraction,
+            onCycleSpeed = quranViewModel::cyclePlaybackSpeed,
+            onToggleAutoAdvance = quranViewModel::toggleAutoAdvance,
+            onSelectSleepTimer = quranViewModel::setSleepTimer,
+            onSelectReciter = quranViewModel::selectReciter,
+            onToggleTajwid = quranViewModel::toggleTajwidEnabled,
+            onToggleArabicOnly = quranViewModel::toggleArabicOnlyMode,
+            onDownloadSurahAudio = quranViewModel::downloadActiveSurahAudio,
+            onToggleBookmark = quranViewModel::toggleBookmark,
+            onCopyVerse = { surah, verse ->
+                copyQuranVerse(context, surah, verse, quranState.selectedTranslation)
+            },
+            onShareVerse = { surah, verse ->
+                shareQuranVerse(context, surah, verse, quranState.selectedTranslation)
+            },
+            onWordTap = { verse, idx, surfaceWord ->
+                quranViewModel.inspectArabicWord(verse, idx, surfaceWord)
+            },
+            onStop = quranViewModel::stopAudio
+        )
+    }
+
+    // Word-by-Word Root & Morphology Sheet (shared across Surah Reader & Listening Page)
+    quranState.selectedWordAnalysis?.let { wordAnalysis ->
+        val reading = LocalReadingTypography.current
+        QuranWordAnalysisSheet(
+            analysis = wordAnalysis,
+            verseRef = quranState.selectedWordVerseRef,
+            arabicFontFamily = reading.arabicFontFamily,
+            tajwidEnabled = quranState.tajwidEnabled,
+            onDismiss = quranViewModel::dismissWordAnalysis
+        )
     }
 }
 

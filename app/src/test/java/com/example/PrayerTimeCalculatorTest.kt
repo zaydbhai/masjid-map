@@ -437,4 +437,252 @@ class PrayerTimeCalculatorTest {
         assertTrue(essential.contains(67))
         assertTrue((78..114).all { essential.contains(it) })
     }
+
+    @Test
+    fun widgetHadithStripsIsnadChainsAndShowsCurrentLargeAndNextSmall() {
+        val nawawi1 =
+            """It is narrated on the authority of Amirul Mu'minin, Abu Hafs 'Umar bin al-Khattab (ra) who said: I heard the Messenger of Allah (ﷺ) say: "Actions are (judged) by motives (niyyah), so each man will have what he intended.""""
+        assertEquals(
+            "Actions are (judged) by motives (niyyah), so each man will have what he intended.",
+            HadithCatalog.stripIsnadForWidget(nawawi1)
+        )
+
+        val bukhari =
+            """Narrated Abu Huraira: Allah's Messenger (ﷺ) said, "Whoever believes in Allah and the Last Day should speak what is good or keep silent.""""
+        assertEquals(
+            "Whoever believes in Allah and the Last Day should speak what is good or keep silent.",
+            HadithCatalog.stripIsnadForWidget(bukhari)
+        )
+
+        val muslim =
+            """Abu Huraira reported Allah's Messenger (ﷺ) as saying: Verily Allah does not look to your faces and your wealth but He looks to your heart and to your deeds."""
+        assertEquals(
+            "Verily Allah does not look to your faces and your wealth but He looks to your heart and to your deeds.",
+            HadithCatalog.stripIsnadForWidget(muslim)
+        )
+
+        val noIsnadWithColon =
+            "Two words are light on the tongue, heavy on the Scale, and beloved to the Most Merciful: 'SubhanAllahi wa bihamdihi.'"
+        assertEquals(noIsnadWithColon, HadithCatalog.stripIsnadForWidget(noIsnadWithColon))
+
+        val tz = TimeZone.getTimeZone("America/Los_Angeles")
+        val cal = Calendar.getInstance(tz).apply {
+            set(2026, Calendar.MAY, 15, 18, 0, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        val schedule = PrayerTimeCalculator.calculateSchedule(
+            latitude = 37.7749,
+            longitude = -122.4194,
+            nowMillis = cal.timeInMillis,
+            method = CalculationMethod.ISNA,
+            madhab = AsrMadhab.STANDARD,
+            timeZone = tz
+        )
+        val currentHeadline = com.example.widget.formatCurrentWidgetHeadline(schedule, use24Hour = true)
+        val nextSummary = com.example.widget.formatNextWidgetSummary(schedule, use24Hour = true)
+        assertTrue("Expected current prayer Asr in big headline, got $currentHeadline", currentHeadline.startsWith("Asr "))
+        assertTrue("Expected Next: Maghrib in small subtitle, got $nextSummary", nextSummary.startsWith("Next: Maghrib "))
+
+        val nextWithIqamah = com.example.widget.formatNextWidgetSummary(
+            schedule = schedule,
+            use24Hour = true,
+            homeNextIqamah = "8:20 PM"
+        )
+        assertTrue("Expected Iqamah in widget summary, got $nextWithIqamah", nextWithIqamah.contains("Iq 8:20 PM"))
+    }
+
+    @Test
+    fun juzLookupAndLastThirdTimestampWorkCorrectly() {
+        assertEquals(1, com.example.domain.JuzCatalog.juzForAyah(1, 1).number)
+        assertEquals(1, com.example.domain.JuzCatalog.juzForAyah(2, 141).number)
+        assertEquals(2, com.example.domain.JuzCatalog.juzForAyah(2, 142).number)
+        assertEquals(16, com.example.domain.JuzCatalog.juzForAyah(18, 75).number)
+        assertEquals(30, com.example.domain.JuzCatalog.juzForAyah(114, 6).number)
+
+        val tz = TimeZone.getTimeZone("Asia/Karachi")
+        val cal = Calendar.getInstance(tz).apply {
+            set(2026, Calendar.MARCH, 15, 14, 0, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        val windows = PrayerTimeCalculator.calculateNightWorshipWindows(
+            latitude = 24.8607,
+            longitude = 67.0011,
+            nowMillis = cal.timeInMillis,
+            method = CalculationMethod.KARACHI,
+            madhab = AsrMadhab.HANAFI,
+            timeZone = tz
+        )
+        assertTrue(windows.lastThirdStartMillis > windows.iftarMillis)
+        assertTrue(windows.lastThirdStartMillis < windows.suhoorEndsMillis)
+    }
+
+    @Test
+    fun iqamahParsingAndLeaveForMasjidCountdownWorkCorrectly() {
+        val tz = TimeZone.getTimeZone("America/Los_Angeles")
+        val cal = Calendar.getInstance(tz).apply {
+            set(2026, Calendar.MAY, 15, 12, 30, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        val schedule = PrayerTimeCalculator.calculateSchedule(
+            latitude = 37.7749,
+            longitude = -122.4194,
+            nowMillis = cal.timeInMillis,
+            method = CalculationMethod.ISNA,
+            madhab = AsrMadhab.STANDARD,
+            timeZone = tz
+        )
+        val dhuhrEntry = schedule.entries.first { it.name == PrayerName.DHUHR }
+
+        // "1:45" without AM/PM resolves to 1:45 PM relative to Dhuhr Adhan
+        val parsed = PrayerTimeCalculator.parseIqamahTimeMillis("1:45", dhuhrEntry.timeMillis, tz)
+        val parsedCal = Calendar.getInstance(tz).apply { timeInMillis = parsed!! }
+        assertEquals(13, parsedCal.get(Calendar.HOUR_OF_DAY))
+        assertEquals(45, parsedCal.get(Calendar.MINUTE))
+
+        val leaveInfo = PrayerTimeCalculator.computeLeaveForMasjidCountdown(
+            masjidName = "Masjid Al-Noor",
+            schedule = schedule,
+            iqamahTimes = mapOf(PrayerName.DHUHR to "1:45 PM"),
+            travelMinutes = 10,
+            prepMinutes = 5,
+            nowMillis = cal.timeInMillis,
+            timeZone = tz
+        )
+        assertEquals(PrayerName.DHUHR, leaveInfo?.prayerName)
+        assertEquals("1:45 PM", leaveInfo?.iqamahFormatted)
+        assertEquals(60L, leaveInfo?.leaveInMinutes)
+        assertEquals(false, leaveInfo?.shouldLeaveNow)
+
+        val urgentCal = Calendar.getInstance(tz).apply {
+            set(2026, Calendar.MAY, 15, 13, 35, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        val urgentInfo = PrayerTimeCalculator.computeLeaveForMasjidCountdown(
+            masjidName = "Masjid Al-Noor",
+            schedule = schedule,
+            iqamahTimes = mapOf(PrayerName.DHUHR to "1:45 PM"),
+            travelMinutes = 10,
+            prepMinutes = 5,
+            nowMillis = urgentCal.timeInMillis,
+            timeZone = tz
+        )
+        assertEquals(true, urgentInfo?.shouldLeaveNow)
+    }
+
+    @Test
+    fun offlineRouteProgressTracksStepsAndArrival() {
+        val start = LatLngPoint(37.7749, -122.4194)
+        val mid = LatLngPoint(37.7760, -122.4194)
+        val end = LatLngPoint(37.7780, -122.4194)
+        val route = com.example.domain.RouteInfo(
+            masjidId = "m1",
+            travelMode = com.example.domain.TravelMode.WALK,
+            distanceMeters = 350,
+            durationSeconds = 300,
+            polylinePoints = listOf(start, mid, end),
+            steps = listOf(
+                com.example.domain.RouteStep("Head north on Market St", "200 m"),
+                com.example.domain.RouteStep("Arrive at Masjid Al-Noor", "150 m")
+            ),
+            source = com.example.domain.RouteSource.OSRM_FALLBACK
+        )
+
+        val enRoute = GeoFormatters.computeRouteProgress(route, start, end)
+        assertEquals(false, enRoute.arrived)
+        assertEquals(0, enRoute.currentStepIndex)
+        assertEquals("Head north on Market St", enRoute.currentInstruction)
+        assertTrue(enRoute.remainingSeconds > 0)
+
+        val arrived = GeoFormatters.computeRouteProgress(route, LatLngPoint(37.77795, -122.4194), end)
+        assertEquals(true, arrived.arrived)
+        assertEquals(0, arrived.remainingSeconds)
+    }
+
+    @Test
+    fun solarHorizonIdentifiesAllThreeProhibitedPrayerWindows() {
+        val tz = TimeZone.getTimeZone("America/Los_Angeles")
+        val dayCal = Calendar.getInstance(tz).apply {
+            set(2026, Calendar.MAY, 15, 12, 0, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        val schedule = PrayerTimeCalculator.calculateSchedule(
+            latitude = 37.7749,
+            longitude = -122.4194,
+            nowMillis = dayCal.timeInMillis,
+            method = CalculationMethod.ISNA,
+            madhab = AsrMadhab.STANDARD,
+            timeZone = tz
+        )
+        val sunriseMs = schedule.entries.first { it.name == PrayerName.SUNRISE }.timeMillis
+        val dhuhrMs = schedule.entries.first { it.name == PrayerName.DHUHR }.timeMillis
+        val maghribMs = schedule.entries.first { it.name == PrayerName.MAGHRIB }.timeMillis
+
+        // Inside Tulu' (Sunrise + 5 min)
+        val atSunrise = PrayerTimeCalculator.calculateSolarHorizonState(
+            latitude = 37.7749,
+            longitude = -122.4194,
+            dayMillis = dayCal.timeInMillis,
+            nowMillis = sunriseMs + 5 * 60_000L,
+            isSelectedDayToday = true,
+            timeZone = tz
+        )
+        assertEquals(3, atSunrise.windows.size)
+        assertEquals(com.example.domain.ProhibitedWindowType.SUNRISE, atSunrise.activeWindow?.type)
+        assertTrue(atSunrise.sunFraction in 0f..0.1f)
+
+        // Inside Zawal (Dhuhr - 4 min)
+        val atZawal = PrayerTimeCalculator.calculateSolarHorizonState(
+            latitude = 37.7749,
+            longitude = -122.4194,
+            dayMillis = dayCal.timeInMillis,
+            nowMillis = dhuhrMs - 4 * 60_000L,
+            isSelectedDayToday = true,
+            timeZone = tz
+        )
+        assertEquals(com.example.domain.ProhibitedWindowType.ZAWAL, atZawal.activeWindow?.type)
+        assertTrue(atZawal.sunFraction in 0.45f..0.55f)
+
+        // Safe Nafl time (2 hours before Maghrib)
+        val safeNafl = PrayerTimeCalculator.calculateSolarHorizonState(
+            latitude = 37.7749,
+            longitude = -122.4194,
+            dayMillis = dayCal.timeInMillis,
+            nowMillis = maghribMs - 120 * 60_000L,
+            isSelectedDayToday = true,
+            timeZone = tz
+        )
+        assertEquals(null, safeNafl.activeWindow)
+
+        // Inside Sunset / Ghuroob (Maghrib - 5 min)
+        val atSunset = PrayerTimeCalculator.calculateSolarHorizonState(
+            latitude = 37.7749,
+            longitude = -122.4194,
+            dayMillis = dayCal.timeInMillis,
+            nowMillis = maghribMs - 5 * 60_000L,
+            isSelectedDayToday = true,
+            timeZone = tz
+        )
+        assertEquals(com.example.domain.ProhibitedWindowType.SUNSET, atSunset.activeWindow?.type)
+    }
+
+    @Test
+    fun tajwidColorizerPreservesTextAndRootAnalyzerExtractsRoots() {
+        val sampleBismillah = "بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ"
+        val palette = com.example.domain.TajwidPalette.forTheme(isDark = false)
+        val annotated = com.example.domain.QuranTajwidEngine.buildTajwidAnnotatedString(sampleBismillah, palette)
+        assertEquals(sampleBismillah, annotated.text)
+        assertTrue("Expected Tajwid spans for Bismillah", annotated.spanStyles.isNotEmpty())
+
+        val tokens = com.example.domain.QuranTajwidEngine.tokenizeArabicWords(sampleBismillah)
+        assertEquals(4, tokens.size)
+
+        val rahim = com.example.domain.QuranTajwidEngine.analyzeArabicWordOffline(tokens[3].surfaceWord, 3)
+        assertEquals("ر-ح-م", rahim.rootLetters)
+
+        val alameen = com.example.domain.QuranTajwidEngine.analyzeArabicWordOffline("الْعَالَمِينَ", 1)
+        assertEquals("ع-ل-م", alameen.rootLetters)
+
+        val nabud = com.example.domain.QuranTajwidEngine.analyzeArabicWordOffline("نَعْبُدُ", 1)
+        assertEquals("ع-ب-د", nabud.rootLetters)
+    }
 }

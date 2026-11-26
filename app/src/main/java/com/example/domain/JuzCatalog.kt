@@ -43,4 +43,13 @@ object JuzCatalog {
         JuzInfo(29, "Tabarakalladhi", "تبارك الذي", 67, 1, 77, 50),
         JuzInfo(30, "Amma Yatasa'alun", "عم يتساءلون", 78, 1, 114, 6)
     )
+
+    fun juzForAyah(chapter: Int, verse: Int): JuzInfo {
+        val code = chapter * 1000 + verse
+        return allJuz.firstOrNull { juz ->
+            val startCode = juz.startSurah * 1000 + juz.startAyah
+            val endCode = juz.endSurah * 1000 + juz.endAyah
+            code in startCode..endCode
+        } ?: allJuz.first()
+    }
 }

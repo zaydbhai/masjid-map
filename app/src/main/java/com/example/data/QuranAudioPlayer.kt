@@ -267,6 +267,15 @@ class QuranAudioPlayer(private val context: Context) {
         applySpeed(mp, speed)
     }
 
+    fun seekTo(positionMs: Int) {
+        val mp = mediaPlayer ?: return
+        if (!prepared) return
+        runCatching {
+            val dur = mp.duration.coerceAtLeast(0)
+            mp.seekTo(positionMs.coerceIn(0, dur))
+        }
+    }
+
     fun isPlaying(): Boolean = runCatching {
         mediaPlayer?.isPlaying == true
     }.getOrDefault(false)

@@ -532,6 +532,7 @@ data class NightWorshipWindows(
     val iftarMillis: Long,
     val midnightFormatted: String,
     val lastThirdStartFormatted: String,
+    val lastThirdStartMillis: Long,
     val nextFastEventLabel: String,
     val millisUntilFastEvent: Long
 )
@@ -639,3 +640,130 @@ enum class WidgetQuickTile(
     }
 }
 
+data class HomeMasjidSnapshot(
+    val id: String,
+    val name: String,
+    val address: String,
+    val location: LatLngPoint
+)
+
+data class LeaveCountdownInfo(
+    val masjidName: String,
+    val prayerName: PrayerName,
+    val adhanFormatted: String,
+    val iqamahFormatted: String?,
+    val targetTimeMillis: Long,
+    val travelMinutes: Int,
+    val prepMinutes: Int,
+    val leaveInMinutes: Long,
+    val shouldLeaveNow: Boolean
+)
+
+data class NavigationProgress(
+    val currentStepIndex: Int,
+    val currentInstruction: String,
+    val nextInstruction: String?,
+    val currentStepDistanceText: String,
+    val remainingMeters: Int,
+    val remainingSeconds: Int,
+    val arrived: Boolean
+)
+
+enum class ProhibitedWindowType(
+    val title: String,
+    val shortTitle: String,
+    val ruleSummary: String
+) {
+    SUNRISE(
+        title = "Tulu' (Post-Sunrise)",
+        shortTitle = "Sunrise",
+        ruleSummary = "Wait ~15 min after Sunrise until the sun rises a spear's height before praying Nafl."
+    ),
+    ZAWAL(
+        title = "Zawal (Solar Zenith)",
+        shortTitle = "Zawal",
+        ruleSummary = "Sun directly overhead (~10 min before Dhuhr); refrain from Nafl prayer until Dhuhr enters."
+    ),
+    SUNSET(
+        title = "Ghuroob (Pre-Sunset)",
+        shortTitle = "Sunset",
+        ruleSummary = "Sun yellowing/setting (~15 min before Maghrib); avoid Nafl (only today's late Asr if missed)."
+    )
+}
+
+data class ProhibitedPrayerWindow(
+    val type: ProhibitedWindowType,
+    val startMillis: Long,
+    val endMillis: Long,
+    val startFormatted: String,
+    val endFormatted: String,
+    val startFractionOfDaylight: Float,
+    val endFractionOfDaylight: Float
+)
+
+data class SolarHorizonState(
+    val isDaytime: Boolean,
+    val sunFraction: Float, // 0f at Sunrise, 0.5f at Zenith/Dhuhr, 1f at Maghrib
+    val windows: List<ProhibitedPrayerWindow>,
+    val activeWindow: ProhibitedPrayerWindow?,
+    val minutesUntilActiveWindowEnds: Int = 0,
+    val sunriseFormatted: String,
+    val dhuhrFormatted: String,
+    val maghribFormatted: String
+)
+
+enum class TajwidRule(
+    val label: String,
+    val arabicLabel: String,
+    val summary: String
+) {
+    GHUNNAH(
+        label = "Ghunnah",
+        arabicLabel = "غُنّة",
+        summary = "Nasal sound held for 2 counts on Noon/Meem Mushaddadah (نّ / مّ)."
+    ),
+    QALQALAH(
+        label = "Qalqalah",
+        arabicLabel = "قَلْقَلَة",
+        summary = "Echoing bounce on letters ق ط ب ج د when bearing Sukun or at pause."
+    ),
+    IDGHAM(
+        label = "Idgham",
+        arabicLabel = "إِدْغَام",
+        summary = "Merging Noon Sakinah or Tanwin smoothly into ي ر م ل و ن."
+    ),
+    IKHFA(
+        label = "Ikhfa / Iqlab",
+        arabicLabel = "إِخْفَاء",
+        summary = "Concealed nasalized pronunciation between clear and merged reading."
+    ),
+    MADD(
+        label = "Madd",
+        arabicLabel = "مَدّ",
+        summary = "Elongation (4–6 counts) marked by Maddah (~) or vowel before Hamzah."
+    ),
+    LAFZ_JALALAH(
+        label = "Lafz al-Jalalah",
+        arabicLabel = "لَفْظ الجَلَالَة",
+        summary = "The Majestic Name of Allah (الله) pronounced with Tafkhim or Tarqiq."
+    )
+}
+
+data class QuranWordToken(
+    val wordIndex: Int,
+    val startOffset: Int,
+    val endOffset: Int,
+    val surfaceWord: String
+)
+
+data class QuranWordAnalysis(
+    val wordIndex: Int,
+    val surfaceWord: String,
+    val cleanArabic: String,
+    val rootLetters: String,
+    val morphologyNote: String,
+    val coreMeaning: String,
+    val contextualGloss: String? = null,
+    val transliteration: String? = null,
+    val dominantTajwidRule: TajwidRule? = null
+)

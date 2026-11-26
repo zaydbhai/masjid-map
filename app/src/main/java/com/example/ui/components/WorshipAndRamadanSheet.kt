@@ -19,19 +19,23 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Mosque
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -68,10 +72,15 @@ fun WorshipAndRamadanSheet(
     recentDateKeys: List<String>,
     suhoorReminderEnabled: Boolean,
     suhoorLeadMinutes: Int,
+    tahajjudAlarmEnabled: Boolean,
+    tahajjudOffsetMinutes: Int,
     onCyclePrayerStatus: (PrayerName) -> Unit,
+    onAdjustQadaCount: (PrayerName, Int) -> Unit,
     onToggleFastedToday: () -> Unit,
     onToggleSuhoorReminder: (Boolean) -> Unit,
     onSelectSuhoorLead: (Int) -> Unit,
+    onToggleTahajjudAlarm: (Boolean) -> Unit,
+    onSelectTahajjudOffset: (Int) -> Unit,
     onSetKhatamGoalDays: (Int) -> Unit,
     onAddKhatamPages: (Int) -> Unit,
     onResetKhatam: () -> Unit,
@@ -288,6 +297,71 @@ fun WorshipAndRamadanSheet(
                 }
             }
 
+            // Dynamic Tahajjud (Last ⅓ of the Night) Wake-Up Alarm
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Bedtime,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Column {
+                                Text(
+                                    text = "Tahajjud (Last ⅓) Alarm",
+                                    style = MaterialTheme.typography.titleSmall
+                                )
+                                Text(
+                                    text = if (tahajjudOffsetMinutes > 0) {
+                                        "Last ⅓ at ${nightWindows.lastThirdStartFormatted} (+${tahajjudOffsetMinutes}m)"
+                                    } else {
+                                        "Wakes at last third of night (${nightWindows.lastThirdStartFormatted})"
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Switch(
+                            checked = tahajjudAlarmEnabled,
+                            onCheckedChange = onToggleTahajjudAlarm,
+                            modifier = Modifier.testTag("tahajjud_alarm_switch")
+                        )
+                    }
+                    if (tahajjudAlarmEnabled) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            listOf(0 to "At Last ⅓", 15 to "+15m", 30 to "+30m").forEach { (offset, label) ->
+                                FilterChip(
+                                    selected = tahajjudOffsetMinutes == offset,
+                                    onClick = { onSelectTahajjudOffset(offset) },
+                                    label = { Text(label) },
+                                    modifier = Modifier.testTag("tahajjud_offset_$offset")
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             // 2. Daily 5-Prayer Interactive Tracker + Fasting Toggle
             Surface(
                 shape = RoundedCornerShape(18.dp),
@@ -461,6 +535,117 @@ fun WorshipAndRamadanSheet(
                             onCheckedChange = { onToggleFastedToday() },
                             modifier = Modifier.testTag("fasting_today_switch")
                         )
+                    }
+                }
+            }
+
+            // 2b. Qada (Missed Prayer) Backlog Ledger
+            Surface(
+                shape = RoundedCornerShape(18.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("qada_ledger_card")
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.History,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Column {
+                                Text(
+                                    text = "Qada Backlog Ledger",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = "Log missed prayers and track each one made up",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.secondaryContainer
+                        ) {
+                            Text(
+                                text = "${trackerState.totalQadaCount} owed",
+                                style = MaterialTheme.typography.labelLarge.copy(fontFeatureSettings = "tnum"),
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+
+                    DailyWorshipLog.trackedPrayers.forEachIndexed { idx, prayer ->
+                        val owed = trackerState.qadaCounts[prayer] ?: 0
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = prayer.displayName,
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                FilledTonalIconButton(
+                                    onClick = { onAdjustQadaCount(prayer, -1) },
+                                    enabled = owed > 0,
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .testTag("qada_dec_${prayer.name.lowercase()}")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Remove,
+                                        contentDescription = "Mark 1 ${prayer.displayName} Qada made up",
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                                Text(
+                                    text = owed.toString(),
+                                    style = MaterialTheme.typography.titleMedium.copy(fontFeatureSettings = "tnum"),
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (owed > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.width(34.dp),
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                )
+                                FilledTonalIconButton(
+                                    onClick = { onAdjustQadaCount(prayer, +1) },
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .testTag("qada_inc_${prayer.name.lowercase()}")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Add,
+                                        contentDescription = "Add 1 missed ${prayer.displayName}",
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        }
+                        if (idx < DailyWorshipLog.trackedPrayers.lastIndex) {
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                        }
                     }
                 }
             }

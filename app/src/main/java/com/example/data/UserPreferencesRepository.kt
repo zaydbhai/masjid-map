@@ -71,7 +71,13 @@ data class UserSettings(
     val persistentCountdownNotification: Boolean = false,
     val autoDndAtPrayer: Boolean = false,
     val highContrastLargePrint: Boolean = false,
-    val fajrFadeInAlarmEnabled: Boolean = false
+    val fajrFadeInAlarmEnabled: Boolean = false,
+    val tahajjudAlarmEnabled: Boolean = false,
+    val tahajjudOffsetMinutes: Int = 0,
+    val leaveForMasjidReminderEnabled: Boolean = false,
+    val leaveForMasjidPrepMinutes: Int = 5,
+    val masjidGeofenceDndEnabled: Boolean = false,
+    val tajwidEnabled: Boolean = false
 ) {
     fun isPrayerAlertEnabled(name: PrayerName): Boolean = when (name) {
         PrayerName.FAJR -> notifyFajr
@@ -131,6 +137,12 @@ class UserPreferencesRepository(private val context: Context) {
         val AUTO_DND_AT_PRAYER = booleanPreferencesKey("auto_dnd_at_prayer")
         val HIGH_CONTRAST_LARGE_PRINT = booleanPreferencesKey("high_contrast_large_print")
         val FAJR_FADE_IN_ALARM = booleanPreferencesKey("fajr_fade_in_alarm")
+        val TAHAJJUD_ALARM_ENABLED = booleanPreferencesKey("tahajjud_alarm_enabled")
+        val TAHAJJUD_OFFSET_MINUTES = intPreferencesKey("tahajjud_offset_minutes")
+        val LEAVE_FOR_MASJID_ENABLED = booleanPreferencesKey("leave_for_masjid_enabled")
+        val LEAVE_FOR_MASJID_PREP_MINUTES = intPreferencesKey("leave_for_masjid_prep_minutes")
+        val MASJID_GEOFENCE_DND_ENABLED = booleanPreferencesKey("masjid_geofence_dnd_enabled")
+        val TAJWID_ENABLED = booleanPreferencesKey("tajwid_enabled")
     }
 
     val settingsFlow: Flow<UserSettings> = context.dataStore.data.map { prefs ->
@@ -182,7 +194,13 @@ class UserPreferencesRepository(private val context: Context) {
             persistentCountdownNotification = prefs[Keys.PERSISTENT_COUNTDOWN_NOTIF] ?: false,
             autoDndAtPrayer = prefs[Keys.AUTO_DND_AT_PRAYER] ?: false,
             highContrastLargePrint = prefs[Keys.HIGH_CONTRAST_LARGE_PRINT] ?: false,
-            fajrFadeInAlarmEnabled = prefs[Keys.FAJR_FADE_IN_ALARM] ?: false
+            fajrFadeInAlarmEnabled = prefs[Keys.FAJR_FADE_IN_ALARM] ?: false,
+            tahajjudAlarmEnabled = prefs[Keys.TAHAJJUD_ALARM_ENABLED] ?: false,
+            tahajjudOffsetMinutes = (prefs[Keys.TAHAJJUD_OFFSET_MINUTES] ?: 0).coerceIn(0, 60),
+            leaveForMasjidReminderEnabled = prefs[Keys.LEAVE_FOR_MASJID_ENABLED] ?: false,
+            leaveForMasjidPrepMinutes = (prefs[Keys.LEAVE_FOR_MASJID_PREP_MINUTES] ?: 5).coerceIn(0, 20),
+            masjidGeofenceDndEnabled = prefs[Keys.MASJID_GEOFENCE_DND_ENABLED] ?: false,
+            tajwidEnabled = prefs[Keys.TAJWID_ENABLED] ?: false
         )
     }
 
@@ -360,5 +378,29 @@ class UserPreferencesRepository(private val context: Context) {
 
     suspend fun setFajrFadeInAlarmEnabled(enabled: Boolean) {
         context.dataStore.edit { it[Keys.FAJR_FADE_IN_ALARM] = enabled }
+    }
+
+    suspend fun setTahajjudAlarmEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.TAHAJJUD_ALARM_ENABLED] = enabled }
+    }
+
+    suspend fun setTahajjudOffsetMinutes(minutes: Int) {
+        context.dataStore.edit { it[Keys.TAHAJJUD_OFFSET_MINUTES] = minutes.coerceIn(0, 60) }
+    }
+
+    suspend fun setLeaveForMasjidReminderEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.LEAVE_FOR_MASJID_ENABLED] = enabled }
+    }
+
+    suspend fun setLeaveForMasjidPrepMinutes(minutes: Int) {
+        context.dataStore.edit { it[Keys.LEAVE_FOR_MASJID_PREP_MINUTES] = minutes.coerceIn(0, 20) }
+    }
+
+    suspend fun setMasjidGeofenceDndEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.MASJID_GEOFENCE_DND_ENABLED] = enabled }
+    }
+
+    suspend fun setTajwidEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.TAJWID_ENABLED] = enabled }
     }
 }

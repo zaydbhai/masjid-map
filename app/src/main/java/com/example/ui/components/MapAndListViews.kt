@@ -111,6 +111,7 @@ fun MasjidOpenStreetMap(
     selectedMasjid: Masjid?,
     activeRoute: RouteInfo?,
     recenterTick: Int,
+    isGuidedNavActive: Boolean = false,
     onSelectMasjid: (Masjid) -> Unit,
     onViewportMoved: (LatLngPoint) -> Unit = {},
     modifier: Modifier = Modifier
@@ -189,9 +190,19 @@ fun MasjidOpenStreetMap(
         }
     }
 
-    LaunchedEffect(activeRoute) {
+    LaunchedEffect(isGuidedNavActive, userLocation) {
+        if (isGuidedNavActive && userLocation != null) {
+            mapView.controller.animateTo(
+                GeoPoint(userLocation.latitude, userLocation.longitude),
+                17.2,
+                380L
+            )
+        }
+    }
+
+    LaunchedEffect(activeRoute, isGuidedNavActive) {
         val route = activeRoute ?: return@LaunchedEffect
-        if (route.polylinePoints.size >= 2) {
+        if (!isGuidedNavActive && route.polylinePoints.size >= 2) {
             val geoPoints = route.polylinePoints.map { GeoPoint(it.latitude, it.longitude) }
             val box = BoundingBox.fromGeoPointsSafe(geoPoints)
             mapView.post {
@@ -558,9 +569,12 @@ fun ActiveRouteCard(
     travelMode: TravelMode,
     showSteps: Boolean,
     isLoadingRoute: Boolean,
+    isGuidedNavActive: Boolean = false,
     onSwitchMode: (TravelMode) -> Unit,
     onToggleSteps: () -> Unit,
     onShowPrayerTimes: (Masjid) -> Unit,
+    onStartInAppNav: () -> Unit = {},
+    onStopInAppNav: () -> Unit = {},
     onStartExternalNav: (Masjid) -> Unit,
     onClearRoute: () -> Unit,
     modifier: Modifier = Modifier
@@ -748,23 +762,39 @@ fun ActiveRouteCard(
                 }
 
                 Button(
-                    onClick = { onStartExternalNav(masjid) },
+                    onClick = if (isGuidedNavActive) onStopInAppNav else onStartInAppNav,
                     modifier = Modifier
                         .weight(1.2f)
                         .height(48.dp)
-                        .testTag("start_navigation_button"),
+                        .testTag("start_in_app_nav_button"),
                     shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary
+                        containerColor = if (isGuidedNavActive) {
+                            MaterialTheme.colorScheme.secondary
+                        } else {
+                            MaterialTheme.colorScheme.primary
+                        }
                     )
                 ) {
                     Icon(
-                        imageVector = Icons.Filled.Navigation,
+                        imageVector = if (isGuidedNavActive) Icons.Filled.Close else Icons.Filled.Navigation,
                         contentDescription = null,
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Start Nav")
+                    Text(if (isGuidedNavActive) "End Guide" else "In-App Guide")
+                }
+
+                FilledTonalIconButton(
+                    onClick = { onStartExternalNav(masjid) },
+                    modifier = Modifier
+                        .size(48.dp)
+                        .testTag("start_navigation_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Navigation,
+                        contentDescription = stringResource(R.string.action_start_navigation)
+                    )
                 }
             }
         }

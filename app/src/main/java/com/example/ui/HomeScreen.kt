@@ -3,6 +3,7 @@ package com.example.ui
 import android.content.Context
 import android.content.Intent
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -24,6 +25,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.AutoStories
 import androidx.compose.material.icons.filled.Bookmark
@@ -33,23 +36,31 @@ import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.DoNotDisturbOn
 import androidx.compose.material.icons.filled.Explore
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.SelfImprovement
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.WarningAmber
+import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material.icons.filled.Widgets
 import androidx.compose.material.icons.outlined.Mosque
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -58,6 +69,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -73,9 +89,13 @@ import com.example.domain.IslamicCalendar
 import com.example.domain.Masjid
 import com.example.domain.PrayerLogStatus
 import com.example.domain.PrayerName
+import com.example.domain.SolarHorizonState
 import com.example.domain.SurahCatalog
 import com.example.ui.theme.LocalReadingTypography
 import java.util.Locale
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 
 @Composable
 fun HomeScreen(
@@ -92,8 +112,14 @@ fun HomeScreen(
     onOpenDuas: () -> Unit,
     onQuickCyclePrayer: (PrayerName) -> Unit,
     onContinueQuran: (surah: Int, ayah: Int) -> Unit,
+    onOpenSurah: (Int) -> Unit,
     onToggleHadithBookmark: () -> Unit,
     onSelectMasjidFromHome: (masjid: Masjid, openTimes: Boolean) -> Unit,
+    onOpenHomeMasjidTimes: () -> Unit,
+    onNavigateToHomeMasjid: () -> Unit,
+    onExitGeofenceQuietMode: () -> Unit,
+    onShiftPrayerDate: (Int) -> Unit,
+    onResetPrayerDate: () -> Unit,
     onNavigateTab: (MainTab) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -103,8 +129,11 @@ fun HomeScreen(
     val borderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = borderAlpha)
     val schedule = state.homePrayerSchedule
     val nextPrayer = schedule.nextPrayer
-    val hijriToday = remember { IslamicCalendar.todayHijri() }
-    val isJumuah = remember { IslamicCalendar.isJumuah() }
+    val isTodaySelected = state.selectedHomeDateOffsetDays == 0
+    val hijriSelected = state.homeSelectedHijri
+    val isJumuah = remember(state.selectedHomeDateOffsetDays) {
+        IslamicCalendar.isJumuah(System.currentTimeMillis() + state.selectedHomeDateOffsetDays * 86_400_000L)
+    }
     val lastSurahInfo = remember(state.lastReadSurah) {
         SurahCatalog.surahs.firstOrNull { it.number == state.lastReadSurah }
             ?: SurahCatalog.surahs.first()
@@ -266,7 +295,7 @@ fun HomeScreen(
                             modifier = Modifier.size(16.dp)
                         )
                         Text(
-                            text = hijriToday.formatted,
+                            text = hijriSelected.formatted,
                             style = MaterialTheme.typography.titleSmall,
                             color = MaterialTheme.colorScheme.onSurface
                         )
@@ -276,7 +305,7 @@ fun HomeScreen(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        if (hijriToday.isWhiteDay) {
+                        if (hijriSelected.isWhiteDay) {
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
                                 color = MaterialTheme.colorScheme.secondaryContainer
@@ -310,6 +339,38 @@ fun HomeScreen(
                     }
                 }
             }
+
+            if (state.activeGeofenceMasjidName != null) {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.tertiaryContainer,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable(onClick = onExitGeofenceQuietMode)
+                        .testTag("home_geofence_dnd_pill")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.DoNotDisturbOn,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = "Quiet Mode active · Near ${state.activeGeofenceMasjidName} · Tap to exit",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
         }
 
         // Architectural Solid Prayer Hero Card (No gradient bloat)
@@ -333,50 +394,154 @@ fun HomeScreen(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "CURRENT PRAYER",
+                            text = if (isTodaySelected) "CURRENT PRAYER" else "SCHEDULE PREVIEW",
                             style = MaterialTheme.typography.labelSmall,
                             letterSpacing = 0.8.sp,
                             color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.76f)
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = schedule.currentPrayerLabel,
+                            text = if (isTodaySelected) schedule.currentPrayerLabel else state.homeSelectedDateLabel,
                             style = MaterialTheme.typography.headlineMedium,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onPrimary
                         )
                         Text(
-                            text = "Started ${schedule.currentPrayerTimeFormatted}",
+                            text = if (isTodaySelected) {
+                                "Started ${schedule.currentPrayerTimeFormatted}"
+                            } else {
+                                hijriSelected.formatted
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.84f)
                         )
                     }
 
                     Column(horizontalAlignment = Alignment.End) {
-                        Text(
-                            text = if (nextPrayer != null) {
-                                "UNTIL ${nextPrayer.name.displayName.uppercase()}"
-                            } else {
-                                "TIME LEFT"
-                            },
-                            style = MaterialTheme.typography.labelSmall,
-                            letterSpacing = 0.7.sp,
-                            color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.76f)
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = formatHmsCountdown(schedule.millisUntilNext),
-                            style = MaterialTheme.typography.headlineSmall.copy(
-                                fontFeatureSettings = "tnum"
-                            ),
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.secondaryContainer
-                        )
-                        if (nextPrayer != null) {
+                        if (isTodaySelected) {
                             Text(
-                                text = "At ${nextPrayer.formattedTime}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.88f)
+                                text = if (nextPrayer != null) {
+                                    "UNTIL ${nextPrayer.name.displayName.uppercase()}"
+                                } else {
+                                    "TIME LEFT"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                letterSpacing = 0.7.sp,
+                                color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.76f)
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = formatHmsCountdown(schedule.millisUntilNext),
+                                style = MaterialTheme.typography.headlineSmall.copy(
+                                    fontFeatureSettings = "tnum"
+                                ),
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.secondaryContainer
+                            )
+                            if (nextPrayer != null) {
+                                Text(
+                                    text = "At ${nextPrayer.formattedTime}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.88f)
+                                )
+                            }
+                        } else {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.secondaryContainer,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .clickable(onClick = onResetPrayerDate)
+                                    .testTag("home_date_reset")
+                            ) {
+                                Text(
+                                    text = "Back to Today",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Interactive Prayer Date Scrubber (-1d, Date Pill, +7d, +1d)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("home_date_scrubber"),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.14f),
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .clickable { onShiftPrayerDate(-1) }
+                            .testTag("home_date_prev")
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                                contentDescription = "Previous day prayer times",
+                                tint = MaterialTheme.colorScheme.onPrimary
+                            )
+                        }
+                    }
+
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.14f),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable(enabled = !isTodaySelected, onClick = onResetPrayerDate)
+                        ) {
+                            Text(
+                                text = "${state.homeSelectedDateLabel} · ${hijriSelected.day} ${hijriSelected.monthName}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
+                            )
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.12f),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { onShiftPrayerDate(7) }
+                                .testTag("home_date_plus7")
+                        ) {
+                            Text(
+                                text = "+7d",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.secondaryContainer,
+                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 7.dp)
+                            )
+                        }
+                    }
+
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.14f),
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .clickable { onShiftPrayerDate(1) }
+                            .testTag("home_date_next")
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                contentDescription = "Next day prayer times",
+                                tint = MaterialTheme.colorScheme.onPrimary
                             )
                         }
                     }
@@ -460,6 +625,195 @@ fun HomeScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Use My Location for Accurate Times")
+                    }
+                }
+            }
+        }
+
+        // Solar Horizon Arc & Prohibited/Makruh Nafl Prayer Windows Card
+        SolarHorizonAndProhibitedWindowsCard(
+            horizon = state.homeSolarHorizon,
+            isTodaySelected = isTodaySelected,
+            borderColor = borderColor
+        )
+
+        // Pinned Home Masjid Commute & Iqamah Card
+        state.homeMasjid?.let { homeMasjid ->
+            val leaveInfo = state.leaveForMasjidInfo
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLowest,
+                border = BorderStroke(1.dp, borderColor),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .widthIn(max = 600.dp)
+                    .testTag("home_masjid_commute_card")
+            ) {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Home,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Column {
+                                Text(
+                                    text = homeMasjid.name,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = "HOME MASJID",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+
+                        if (leaveInfo != null) {
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (leaveInfo.shouldLeaveNow) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.secondaryContainer
+                                }
+                            ) {
+                                Text(
+                                    text = if (leaveInfo.shouldLeaveNow) {
+                                        "Leave now"
+                                    } else {
+                                        "Leave in ${leaveInfo.leaveInMinutes}m"
+                                    },
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = if (leaveInfo.shouldLeaveNow) {
+                                        MaterialTheme.colorScheme.onPrimary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSecondaryContainer
+                                    },
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    if (leaveInfo != null) {
+                        val iqamahPart = if (!leaveInfo.iqamahFormatted.isNullOrBlank()) {
+                            " · Iqamah ${leaveInfo.iqamahFormatted}"
+                        } else {
+                            ""
+                        }
+                        Text(
+                            text = "${leaveInfo.prayerName.displayName}: Adhan ${leaveInfo.adhanFormatted}$iqamahPart · ~${leaveInfo.travelMinutes}m ${state.travelMode.label.lowercase()}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        FilledTonalButton(
+                            onClick = onNavigateToHomeMasjid,
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                                .testTag("home_guide_home_masjid_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Navigation,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Guide")
+                        }
+                        OutlinedButton(
+                            onClick = onOpenHomeMasjidTimes,
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                                .testTag("home_times_home_masjid_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Schedule,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Times")
+                        }
+                    }
+                }
+            }
+        }
+
+        // Smart Friday (Jumu'ah) Sunnah Card
+        if (isJumuah) {
+            val homeJumuah = state.homeMasjid?.let { state.jumuahByMasjid[it.id] }
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f),
+                border = BorderStroke(1.dp, borderColor),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .widthIn(max = 600.dp)
+                    .testTag("home_jumuah_card")
+            ) {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        text = "Jumu'ah Mubarak",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = buildString {
+                            append("Recite Surah Al-Kahf, send abundant Salawat, and arrive early for the Khutbah.")
+                            if (homeJumuah != null && homeJumuah.isConfigured) {
+                                append(" ${state.homeMasjid.name}: ${homeJumuah.summaryText()}")
+                            }
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    FilledTonalButton(
+                        onClick = { onOpenSurah(18) },
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("home_jumuah_kahf_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.MenuBook,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Read Surah Al-Kahf (18)")
                     }
                 }
             }
@@ -1065,6 +1419,208 @@ private fun formatHmsCountdown(millis: Long): String {
         String.format(Locale.getDefault(), "%dh %02dm %02ds", h, m, s)
     } else {
         String.format(Locale.getDefault(), "%dm %02ds", m, s)
+    }
+}
+
+@Composable
+private fun SolarHorizonAndProhibitedWindowsCard(
+    horizon: SolarHorizonState,
+    isTodaySelected: Boolean,
+    borderColor: Color
+) {
+    val activeWindow = horizon.activeWindow
+    val primaryColor = MaterialTheme.colorScheme.primary
+    val secondaryContainer = MaterialTheme.colorScheme.secondaryContainer
+    val onSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant
+    val trackColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+    val cautionColor = MaterialTheme.colorScheme.error
+
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLowest,
+        border = BorderStroke(
+            width = if (activeWindow != null) 1.5.dp else 1.dp,
+            color = if (activeWindow != null) cautionColor.copy(alpha = 0.6f) else borderColor
+        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .widthIn(max = 600.dp)
+            .testTag("home_solar_horizon_card")
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(
+                        imageVector = if (activeWindow != null) Icons.Filled.WarningAmber else Icons.Filled.WbSunny,
+                        contentDescription = null,
+                        tint = if (activeWindow != null) cautionColor else primaryColor,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        text = "Sun Horizon & Nafl Windows",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = when {
+                        activeWindow != null -> cautionColor.copy(alpha = 0.14f)
+                        isTodaySelected -> primaryColor.copy(alpha = 0.12f)
+                        else -> MaterialTheme.colorScheme.surfaceContainerLow
+                    }
+                ) {
+                    Text(
+                        text = when {
+                            activeWindow != null -> "Wait ${horizon.minutesUntilActiveWindowEnds}m · ${activeWindow.type.shortTitle}"
+                            isTodaySelected -> "Nafl Safe"
+                            else -> "Preview"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = when {
+                            activeWindow != null -> cautionColor
+                            isTodaySelected -> primaryColor
+                            else -> onSurfaceVariant
+                        },
+                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            // Custom Canvas Solar Horizon Arc highlighting Tulu', Zawal, and Ghuroob zones
+            Canvas(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(66.dp)
+            ) {
+                val hPad = 24.dp.toPx()
+                val arcWidth = (size.width - hPad * 2f).coerceAtLeast(40f)
+                val arcRadius = arcWidth / 2f
+                val horizonY = size.height - 10.dp.toPx()
+                val topLeft = Offset(hPad, horizonY - arcRadius)
+                val arcSize = Size(arcWidth, arcRadius * 2f)
+
+                // Horizon baseline
+                drawLine(
+                    color = trackColor,
+                    start = Offset(8.dp.toPx(), horizonY),
+                    end = Offset(size.width - 8.dp.toPx(), horizonY),
+                    strokeWidth = 1.5.dp.toPx(),
+                    cap = StrokeCap.Round
+                )
+
+                // Full daylight arc (180° -> 0°)
+                drawArc(
+                    color = trackColor,
+                    startAngle = 180f,
+                    sweepAngle = 180f,
+                    useCenter = false,
+                    topLeft = topLeft,
+                    size = arcSize,
+                    style = Stroke(width = 4.dp.toPx(), cap = StrokeCap.Round)
+                )
+
+                // Prohibited/Makruh arc segments (Tulu', Zawal, Ghuroob)
+                horizon.windows.forEach { w ->
+                    val startAngle = 180f + w.startFractionOfDaylight * 180f
+                    val sweep = ((w.endFractionOfDaylight - w.startFractionOfDaylight) * 180f)
+                        .coerceAtLeast(6f)
+                    drawArc(
+                        color = cautionColor.copy(alpha = 0.72f),
+                        startAngle = startAngle,
+                        sweepAngle = sweep,
+                        useCenter = false,
+                        topLeft = topLeft,
+                        size = arcSize,
+                        style = Stroke(width = 5.5.dp.toPx(), cap = StrokeCap.Round)
+                    )
+                }
+
+                // Sun dot position along the arc (angle theta from PI -> 0)
+                if (horizon.isDaytime) {
+                    val f = horizon.sunFraction.coerceIn(0f, 1f)
+                    val angleRad = (1.0 - f) * PI
+                    val centerX = size.width / 2f
+                    val sunX = centerX + (arcRadius * cos(angleRad)).toFloat()
+                    val sunY = horizonY - (arcRadius * sin(angleRad)).toFloat()
+
+                    drawCircle(
+                        color = secondaryContainer,
+                        radius = 10.dp.toPx(),
+                        center = Offset(sunX, sunY)
+                    )
+                    drawCircle(
+                        color = if (activeWindow != null) cautionColor else primaryColor,
+                        radius = 5.5.dp.toPx(),
+                        center = Offset(sunX, sunY)
+                    )
+                }
+            }
+
+            if (activeWindow != null) {
+                Text(
+                    text = activeWindow.type.ruleSummary,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = cautionColor
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                horizon.windows.forEach { w ->
+                    val isActive = activeWindow?.type == w.type
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (isActive) {
+                            cautionColor.copy(alpha = 0.12f)
+                        } else {
+                            MaterialTheme.colorScheme.surfaceContainerLow
+                        },
+                        border = BorderStroke(
+                            1.dp,
+                            if (isActive) cautionColor.copy(alpha = 0.5f) else borderColor
+                        ),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Text(
+                                text = w.type.shortTitle,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (isActive) cautionColor else MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "${w.startFormatted.replace(" AM", "").replace(" PM", "")}–${w.endFormatted}",
+                                style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

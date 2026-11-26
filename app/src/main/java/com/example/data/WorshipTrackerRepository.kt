@@ -23,7 +23,8 @@ data class WorshipTrackerState(
     val khatamTargetDays: Int = 30,
     val khatamCompletedPages: Int = 0,
     val zakatCurrency: CurrencyPreset = CurrencyPreset.USD,
-    val zakatNisabStandard: NisabStandard = NisabStandard.SILVER
+    val zakatNisabStandard: NisabStandard = NisabStandard.SILVER,
+    val qadaCounts: Map<PrayerName, Int> = emptyMap()
 ) {
     val todayLog: DailyWorshipLog
         get() = logsByDate[todayKey] ?: DailyWorshipLog(dateKey = todayKey)
@@ -34,6 +35,9 @@ data class WorshipTrackerState(
 
     val khatamProgressFraction: Float
         get() = (khatamCompletedPages / 604f).coerceIn(0f, 1f)
+
+    val totalQadaCount: Int
+        get() = DailyWorshipLog.trackedPrayers.sumOf { qadaCounts[it] ?: 0 }
 }
 
 class WorshipTrackerRepository private constructor(context: Context) {
@@ -109,6 +113,24 @@ class WorshipTrackerRepository private constructor(context: Context) {
         _state.value = _state.value.copy(zakatCurrency = currency, zakatNisabStandard = nisab)
     }
 
+    fun adjustQadaCount(prayer: PrayerName, delta: Int) {
+        if (prayer == PrayerName.SUNRISE) return
+        val updated = _state.value.qadaCounts.toMutableMap()
+        val next = ((updated[prayer] ?: 0) + delta).coerceIn(0, 99_999)
+        if (next == 0) {
+            updated.remove(prayer)
+        } else {
+            updated[prayer] = next
+        }
+        saveQadaCounts(updated)
+        _state.value = _state.value.copy(qadaCounts = updated)
+    }
+
+    fun resetQadaCounts() {
+        prefs.edit().remove(KEY_QADA_COUNTS).apply()
+        _state.value = _state.value.copy(qadaCounts = emptyMap())
+    }
+
     fun recentDateKeys(days: Int = 14): List<String> {
         val cal = Calendar.getInstance()
         val fmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
@@ -161,8 +183,31 @@ class WorshipTrackerRepository private constructor(context: Context) {
             khatamTargetDays = days,
             khatamCompletedPages = pages,
             zakatCurrency = currency,
-            zakatNisabStandard = nisab
+            zakatNisabStandard = nisab,
+            qadaCounts = loadQadaCounts()
         )
+    }
+
+    private fun saveQadaCounts(map: Map<PrayerName, Int>) {
+        val obj = JSONObject()
+        DailyWorshipLog.trackedPrayers.forEach { p ->
+            val count = map[p] ?: 0
+            if (count > 0) obj.put(p.name, count)
+        }
+        prefs.edit().putString(KEY_QADA_COUNTS, obj.toString()).apply()
+    }
+
+    private fun loadQadaCounts(): Map<PrayerName, Int> {
+        val raw = prefs.getString(KEY_QADA_COUNTS, null) ?: return emptyMap()
+        return runCatching {
+            val obj = JSONObject(raw)
+            val result = LinkedHashMap<PrayerName, Int>()
+            DailyWorshipLog.trackedPrayers.forEach { p ->
+                val v = obj.optInt(p.name, 0)
+                if (v > 0) result[p] = v
+            }
+            result
+        }.getOrDefault(emptyMap())
     }
 
     private fun loadLogsMap(): Map<String, DailyWorshipLog> {
@@ -221,6 +266,7 @@ class WorshipTrackerRepository private constructor(context: Context) {
         private const val KEY_KHATAM_PAGES = "khatam_completed_pages"
         private const val KEY_ZAKAT_CURRENCY = "zakat_currency"
         private const val KEY_ZAKAT_NISAB = "zakat_nisab"
+        private const val KEY_QADA_COUNTS = "qada_counts_json"
 
         @Volatile
         private var instance: WorshipTrackerRepository? = null

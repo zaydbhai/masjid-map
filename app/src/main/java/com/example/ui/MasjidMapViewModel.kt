@@ -1,6 +1,8 @@
 package com.example.ui
 
 import android.app.Application
+import android.app.NotificationManager
+import android.content.Context
 import androidx.glance.appwidget.updateAll
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -22,11 +24,18 @@ import com.example.domain.AsrMadhab
 import com.example.domain.CalculationMethod
 import com.example.domain.CurrencyPreset
 import com.example.domain.EnglishFontOption
+import com.example.domain.GeoFormatters
 import com.example.domain.HadithCatalog
 import com.example.domain.HadithEntry
+import com.example.domain.HijriDate
+import com.example.domain.HomeMasjidSnapshot
+import com.example.domain.IslamicCalendar
 import com.example.domain.JumuahTimes
 import com.example.domain.LatLngPoint
+import com.example.domain.LeaveCountdownInfo
 import com.example.domain.Masjid
+import com.example.domain.MasjidSource
+import com.example.domain.NavigationProgress
 import com.example.domain.NightWorshipWindows
 import com.example.domain.NisabStandard
 import com.example.domain.PrayerAlertSound
@@ -35,6 +44,7 @@ import com.example.domain.PrayerSchedule
 import com.example.domain.PrayerTimeCalculator
 import com.example.domain.QuranTranslationOption
 import com.example.domain.RouteInfo
+import com.example.domain.SolarHorizonState
 import com.example.domain.TravelMode
 import com.example.domain.WidgetBottomMode
 import com.example.domain.WidgetQuickTile
@@ -42,6 +52,7 @@ import com.example.domain.WidgetThemePreset
 import com.example.domain.WidgetTileShape
 import com.example.notifications.PrayerAlarmScheduler
 import com.example.widget.PrayerTimesWidget
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -70,6 +81,10 @@ data class MasjidMapUiState(
     val mapCenter: LatLngPoint? = null,
     val viewportCenter: LatLngPoint? = null,
     val homePrayerSchedule: PrayerSchedule = PrayerTimeCalculator.calculateSchedule(21.4225, 39.8262),
+    val homeSolarHorizon: SolarHorizonState = PrayerTimeCalculator.calculateSolarHorizonState(21.4225, 39.8262),
+    val selectedHomeDateOffsetDays: Int = 0,
+    val homeSelectedDateLabel: String = "Today",
+    val homeSelectedHijri: HijriDate = IslamicCalendar.todayHijri(),
     val nightWorshipWindows: NightWorshipWindows = PrayerTimeCalculator.calculateNightWorshipWindows(21.4225, 39.8262),
     val worshipTrackerState: WorshipTrackerState = WorshipTrackerState(),
     val homeLocationLabel: String = "Default (Enable GPS for local times)",
@@ -113,6 +128,17 @@ data class MasjidMapUiState(
     val autoDndAtPrayer: Boolean = false,
     val highContrastLargePrint: Boolean = false,
     val fajrFadeInAlarmEnabled: Boolean = false,
+    val tahajjudAlarmEnabled: Boolean = false,
+    val tahajjudOffsetMinutes: Int = 0,
+    val leaveForMasjidReminderEnabled: Boolean = false,
+    val leaveForMasjidPrepMinutes: Int = 5,
+    val masjidGeofenceDndEnabled: Boolean = false,
+    val tajwidEnabled: Boolean = false,
+    val activeGeofenceMasjidName: String? = null,
+    val homeMasjid: HomeMasjidSnapshot? = null,
+    val leaveForMasjidInfo: LeaveCountdownInfo? = null,
+    val isGuidedNavActive: Boolean = false,
+    val navigationProgress: NavigationProgress? = null,
     val isDownloadingAdhan: Boolean = false,
     val cachedAdhanIds: Set<String> = emptySet(),
     val tasbeehPresetId: String = "subhanallah",
@@ -164,6 +190,7 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
     private val worshipTrackerRepo = WorshipTrackerRepository.getInstance(application)
 
     private var restoredSavedLocation = false
+    private var guidedNavJob: Job? = null
 
     private val _uiState = MutableStateFlow(
         MasjidMapUiState(
@@ -202,6 +229,17 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             extrasRepo.jumuahByMasjid.collect { jumuah ->
                 _uiState.update { it.copy(jumuahByMasjid = jumuah) }
+            }
+        }
+
+        viewModelScope.launch {
+            extrasRepo.homeMasjid.collect { hm ->
+                _uiState.update { st ->
+                    st.copy(
+                        homeMasjid = hm,
+                        leaveForMasjidInfo = computeLeaveInfoForState(st.copy(homeMasjid = hm))
+                    )
+                }
             }
         }
 
@@ -278,10 +316,21 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
                 }
                 val refPoint = effectiveUserLoc ?: effectiveCenter ?: LatLngPoint(21.4225, 39.8262)
                 val now = System.currentTimeMillis()
+                val offsetDays = current.selectedHomeDateOffsetDays
+                val targetDayMillis = now + offsetDays * 86_400_000L
                 val updatedHomeSchedule = PrayerTimeCalculator.calculateSchedule(
                     latitude = refPoint.latitude,
                     longitude = refPoint.longitude,
+                    nowMillis = targetDayMillis,
+                    method = settings.calculationMethod,
+                    madhab = settings.asrMadhab
+                )
+                val updatedSolarHorizon = PrayerTimeCalculator.calculateSolarHorizonState(
+                    latitude = refPoint.latitude,
+                    longitude = refPoint.longitude,
+                    dayMillis = targetDayMillis,
                     nowMillis = now,
+                    isSelectedDayToday = offsetDays == 0,
                     method = settings.calculationMethod,
                     madhab = settings.asrMadhab
                 )
@@ -323,6 +372,12 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
                         autoDndAtPrayer = settings.autoDndAtPrayer,
                         highContrastLargePrint = settings.highContrastLargePrint,
                         fajrFadeInAlarmEnabled = settings.fajrFadeInAlarmEnabled,
+                        tahajjudAlarmEnabled = settings.tahajjudAlarmEnabled,
+                        tahajjudOffsetMinutes = settings.tahajjudOffsetMinutes,
+                        leaveForMasjidReminderEnabled = settings.leaveForMasjidReminderEnabled,
+                        leaveForMasjidPrepMinutes = settings.leaveForMasjidPrepMinutes,
+                        masjidGeofenceDndEnabled = settings.masjidGeofenceDndEnabled,
+                        tajwidEnabled = settings.tajwidEnabled,
                         tasbeehPresetId = settings.tasbeehPresetId,
                         tasbeehCount = settings.tasbeehCount,
                         tasbeehTarget = settings.tasbeehTarget,
@@ -343,7 +398,21 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
                         selectedMasjid = updatedSelected,
                         showPrayerSheetFor = updatedSheet,
                         homePrayerSchedule = updatedHomeSchedule,
-                        nightWorshipWindows = updatedNightWindows
+                        homeSolarHorizon = updatedSolarHorizon,
+                        homeSelectedDateLabel = formatHomeDateLabel(offsetDays, targetDayMillis),
+                        homeSelectedHijri = IslamicCalendar.todayHijri(targetDayMillis),
+                        nightWorshipWindows = updatedNightWindows,
+                        leaveForMasjidInfo = computeLeaveInfoForState(
+                            it.copy(
+                                userLocation = effectiveUserLoc,
+                                mapCenter = effectiveCenter,
+                                travelMode = settings.travelMode,
+                                leaveForMasjidPrepMinutes = settings.leaveForMasjidPrepMinutes,
+                                roadMetricsByMasjidId = updatedRoadMetrics,
+                                homePrayerSchedule = updatedHomeSchedule
+                            ),
+                            nowMillis = now
+                        )
                     )
                 }
 
@@ -358,10 +427,21 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
                 val state = _uiState.value
                 val ref = state.userLocation ?: state.mapCenter ?: LatLngPoint(21.4225, 39.8262)
                 val now = System.currentTimeMillis()
+                val offsetDays = state.selectedHomeDateOffsetDays
+                val targetDayMillis = now + offsetDays * 86_400_000L
                 val schedule = PrayerTimeCalculator.calculateSchedule(
                     latitude = ref.latitude,
                     longitude = ref.longitude,
+                    nowMillis = targetDayMillis,
+                    method = state.calculationMethod,
+                    madhab = state.asrMadhab
+                )
+                val solarHorizon = PrayerTimeCalculator.calculateSolarHorizonState(
+                    latitude = ref.latitude,
+                    longitude = ref.longitude,
+                    dayMillis = targetDayMillis,
                     nowMillis = now,
+                    isSelectedDayToday = offsetDays == 0,
                     method = state.calculationMethod,
                     madhab = state.asrMadhab
                 )
@@ -372,10 +452,29 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
                     method = state.calculationMethod,
                     madhab = state.asrMadhab
                 )
+                val todayScheduleForLeave = if (offsetDays == 0) {
+                    schedule
+                } else {
+                    PrayerTimeCalculator.calculateSchedule(
+                        latitude = ref.latitude,
+                        longitude = ref.longitude,
+                        nowMillis = now,
+                        method = state.calculationMethod,
+                        madhab = state.asrMadhab
+                    )
+                }
+                val leaveInfo = computeLeaveInfoForState(
+                    state.copy(homePrayerSchedule = todayScheduleForLeave),
+                    nowMillis = now
+                )
                 _uiState.update {
                     it.copy(
                         homePrayerSchedule = schedule,
-                        nightWorshipWindows = windows
+                        homeSolarHorizon = solarHorizon,
+                        homeSelectedDateLabel = formatHomeDateLabel(offsetDays, targetDayMillis),
+                        homeSelectedHijri = IslamicCalendar.todayHijri(targetDayMillis),
+                        nightWorshipWindows = windows,
+                        leaveForMasjidInfo = leaveInfo
                     )
                 }
                 delay(1_000L)
@@ -500,6 +599,7 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
                     recenterTick = it.recenterTick + 1
                 )
             }
+            checkMasjidGeofenceDnd(loc)
             fetchNearbyAt(center = loc, reference = loc)
         }
     }
@@ -565,6 +665,7 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
         }
 
         viewModelScope.launch {
+            stopInAppNavigation()
             _uiState.update {
                 it.copy(
                     isLoadingMasjids = true,
@@ -763,16 +864,72 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
         extrasRepo.toggleFavoriteMasjid(masjidId)
     }
 
+    fun toggleHomeMasjid(masjid: Masjid) {
+        val current = _uiState.value.homeMasjid
+        if (current?.id == masjid.id) {
+            extrasRepo.clearHomeMasjid()
+            _uiState.update { it.copy(errorMessage = "Unpinned Home Masjid.") }
+        } else {
+            extrasRepo.setHomeMasjid(masjid)
+            _uiState.update { it.copy(errorMessage = "${masjid.name} pinned as Home Masjid.") }
+        }
+        viewModelScope.launch {
+            PrayerAlarmScheduler.scheduleUpcoming(appContext)
+            runCatching { PrayerTimesWidget().updateAll(appContext) }
+        }
+    }
+
+    fun openHomeMasjidOnMap(openTimes: Boolean = false, startRoute: Boolean = false) {
+        val snapshot = _uiState.value.homeMasjid ?: return
+        val state = _uiState.value
+        val existing = state.masjids.firstOrNull { it.id == snapshot.id }
+        val masjid = existing ?: run {
+            val origin = state.userLocation ?: state.mapCenter ?: snapshot.location
+            val dist = PrayerTimeCalculator.distanceMeters(origin, snapshot.location)
+            Masjid(
+                id = snapshot.id,
+                name = snapshot.name,
+                address = snapshot.address,
+                location = snapshot.location,
+                distanceMeters = dist,
+                source = MasjidSource.OPEN_STREET_MAP,
+                qiblaBearingDegrees = PrayerTimeCalculator.qiblaBearingDegrees(snapshot.location),
+                prayerSchedule = PrayerTimeCalculator.calculateSchedule(
+                    latitude = snapshot.location.latitude,
+                    longitude = snapshot.location.longitude,
+                    method = state.calculationMethod,
+                    madhab = state.asrMadhab
+                )
+            )
+        }
+        if (openTimes) {
+            openPrayerSheet(masjid)
+        } else if (startRoute) {
+            requestRouteTo(masjid, startGuidedImmediately = true)
+        } else {
+            selectMasjid(masjid, switchToMap = true)
+            _uiState.update { it.copy(currentTab = MainTab.MASJIDS, recenterTick = it.recenterTick + 1) }
+        }
+    }
+
     fun toggleFavoritesFilter() {
         _uiState.update { it.copy(showOnlyFavoriteMasjids = !it.showOnlyFavoriteMasjids) }
     }
 
     fun saveIqamahTimes(masjidId: String, times: Map<PrayerName, String>) {
         extrasRepo.setIqamahTimes(masjidId, times)
+        viewModelScope.launch {
+            PrayerAlarmScheduler.scheduleUpcoming(appContext)
+            runCatching { PrayerTimesWidget().updateAll(appContext) }
+        }
     }
 
     fun clearIqamahTimes(masjidId: String) {
         extrasRepo.clearIqamahTimes(masjidId)
+        viewModelScope.launch {
+            PrayerAlarmScheduler.scheduleUpcoming(appContext)
+            runCatching { PrayerTimesWidget().updateAll(appContext) }
+        }
     }
 
     fun toggleHadithOfTheDayBookmark() {
@@ -783,7 +940,11 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
         _uiState.update { it.copy(viewMode = mode) }
     }
 
-    fun requestRouteTo(masjid: Masjid, mode: TravelMode = _uiState.value.travelMode) {
+    fun requestRouteTo(
+        masjid: Masjid,
+        mode: TravelMode = _uiState.value.travelMode,
+        startGuidedImmediately: Boolean = false
+    ) {
         val origin = _uiState.value.userLocation
             ?: _uiState.value.searchReferenceLocation
             ?: _uiState.value.mapCenter?.takeIf {
@@ -797,6 +958,7 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
         }
 
         viewModelScope.launch {
+            stopInAppNavigation()
             _uiState.update {
                 it.copy(
                     selectedMasjid = masjid,
@@ -829,7 +991,58 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
                     showRouteSteps = false
                 )
             }
+            if (startGuidedImmediately) {
+                startInAppNavigation()
+            }
         }
+    }
+
+    fun startInAppNavigation() {
+        val state = _uiState.value
+        val route = state.activeRoute ?: return
+        val dest = state.selectedMasjid ?: return
+        val seedPoint = state.userLocation ?: state.searchReferenceLocation ?: state.mapCenter ?: dest.location
+        val initialProgress = GeoFormatters.computeRouteProgress(route, seedPoint, dest.location)
+
+        _uiState.update {
+            it.copy(
+                isGuidedNavActive = true,
+                navigationProgress = initialProgress,
+                mapCenter = seedPoint,
+                recenterTick = it.recenterTick + 1
+            )
+        }
+
+        guidedNavJob?.cancel()
+        if (!state.hasLocationPermission) return
+
+        guidedNavJob = viewModelScope.launch {
+            locationProvider.locationUpdatesFlow(intervalMs = 3_000L).collect { pt ->
+                val current = _uiState.value
+                val active = current.activeRoute ?: return@collect
+                val target = current.selectedMasjid ?: return@collect
+                val progress = GeoFormatters.computeRouteProgress(active, pt, target.location)
+                _uiState.update { st ->
+                    st.copy(
+                        userLocation = pt,
+                        mapCenter = pt,
+                        navigationProgress = progress,
+                        recenterTick = st.recenterTick + 1
+                    )
+                }
+                checkMasjidGeofenceDnd(pt)
+                if (progress.arrived) {
+                    _uiState.update { it.copy(errorMessage = "You have arrived at ${target.name}.") }
+                    stopInAppNavigation()
+                }
+            }
+        }
+    }
+
+    fun stopInAppNavigation() {
+        guidedNavJob?.cancel()
+        guidedNavJob = null
+        _uiState.update { it.copy(isGuidedNavActive = false, navigationProgress = null) }
     }
 
     fun switchTravelMode(mode: TravelMode) {
@@ -852,6 +1065,7 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun clearRoute() {
+        stopInAppNavigation()
         _uiState.update { it.copy(activeRoute = null, showRouteSteps = false) }
     }
 
@@ -955,10 +1169,17 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
     fun saveJumuahTimes(masjidId: String, firstKhutbah: String, secondKhutbah: String) {
         extrasRepo.setJumuahTimes(masjidId, firstKhutbah, secondKhutbah)
         _uiState.update { it.copy(errorMessage = "Jumu'ah Khutbah times saved offline.") }
+        viewModelScope.launch {
+            runCatching { PrayerTimesWidget().updateAll(appContext) }
+        }
     }
 
     fun cyclePrayerLogStatus(prayer: PrayerName) {
         worshipTrackerRepo.cyclePrayerStatus(prayer)
+    }
+
+    fun adjustQadaCount(prayer: PrayerName, delta: Int) {
+        worshipTrackerRepo.adjustQadaCount(prayer, delta)
     }
 
     fun toggleFastedToday() {
@@ -1006,6 +1227,100 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun setFajrFadeInAlarmEnabled(enabled: Boolean) {
         viewModelScope.launch { prefs.setFajrFadeInAlarmEnabled(enabled) }
+    }
+
+    fun setTahajjudAlarmEnabled(enabled: Boolean) {
+        viewModelScope.launch { prefs.setTahajjudAlarmEnabled(enabled) }
+    }
+
+    fun setTahajjudOffsetMinutes(minutes: Int) {
+        viewModelScope.launch { prefs.setTahajjudOffsetMinutes(minutes) }
+    }
+
+    fun setLeaveForMasjidReminderEnabled(enabled: Boolean) {
+        viewModelScope.launch { prefs.setLeaveForMasjidReminderEnabled(enabled) }
+    }
+
+    fun setLeaveForMasjidPrepMinutes(minutes: Int) {
+        viewModelScope.launch { prefs.setLeaveForMasjidPrepMinutes(minutes) }
+    }
+
+    fun setMasjidGeofenceDndEnabled(enabled: Boolean) {
+        viewModelScope.launch { prefs.setMasjidGeofenceDndEnabled(enabled) }
+        if (!enabled) {
+            exitMasjidQuietMode()
+        } else {
+            _uiState.value.userLocation?.let { checkMasjidGeofenceDnd(it) }
+        }
+    }
+
+    fun exitMasjidQuietMode() {
+        val nm = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+        if (nm != null && nm.isNotificationPolicyAccessGranted) {
+            runCatching {
+                if (nm.currentInterruptionFilter == NotificationManager.INTERRUPTION_FILTER_PRIORITY) {
+                    nm.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALL)
+                }
+            }
+        }
+        _uiState.update { it.copy(activeGeofenceMasjidName = null) }
+    }
+
+    private fun checkMasjidGeofenceDnd(userLoc: LatLngPoint) {
+        val state = _uiState.value
+        if (!state.masjidGeofenceDndEnabled) return
+        val nm = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+        if (!nm.isNotificationPolicyAccessGranted) return
+
+        val candidates = buildList {
+            state.homeMasjid?.let { add(it.name to it.location) }
+            state.masjids
+                .filter { state.favoriteMasjidIds.contains(it.id) }
+                .forEach { add(it.name to it.location) }
+        }
+        if (candidates.isEmpty()) return
+
+        val nearest = candidates.minByOrNull { (_, loc) ->
+            PrayerTimeCalculator.distanceMeters(userLoc, loc)
+        } ?: return
+        val distMeters = PrayerTimeCalculator.distanceMeters(userLoc, nearest.second)
+
+        if (distMeters <= 100.0 && state.activeGeofenceMasjidName == null) {
+            runCatching {
+                nm.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_PRIORITY)
+                PrayerAlarmScheduler.scheduleDndRestore(appContext, delayMinutes = 45)
+                _uiState.update { it.copy(activeGeofenceMasjidName = nearest.first) }
+            }
+        } else if (distMeters > 180.0 && state.activeGeofenceMasjidName != null) {
+            exitMasjidQuietMode()
+        }
+    }
+
+    private fun computeLeaveInfoForState(
+        state: MasjidMapUiState,
+        nowMillis: Long = System.currentTimeMillis()
+    ): LeaveCountdownInfo? {
+        val home = state.homeMasjid ?: return null
+        val origin = state.userLocation ?: state.searchReferenceLocation ?: state.mapCenter
+        val metrics = state.roadMetricsByMasjidId[home.id]?.takeIf { it.travelMode == state.travelMode }
+            ?: run {
+                val dist = if (origin != null) {
+                    PrayerTimeCalculator.distanceMeters(origin, home.location)
+                } else {
+                    1_500.0
+                }
+                GeoFormatters.fallbackRoadMetrics(dist, state.travelMode)
+            }
+        val travelMinutes = (metrics.durationSeconds / 60.0).let { kotlin.math.round(it).toInt().coerceAtLeast(1) }
+        val iqamahMap = state.iqamahByMasjid[home.id].orEmpty()
+        return PrayerTimeCalculator.computeLeaveForMasjidCountdown(
+            masjidName = home.name,
+            schedule = state.homePrayerSchedule,
+            iqamahTimes = iqamahMap,
+            travelMinutes = travelMinutes,
+            prepMinutes = state.leaveForMasjidPrepMinutes,
+            nowMillis = nowMillis
+        )
     }
 
     fun downloadAndPreviewAdhan(sound: PrayerAlertSound) {
@@ -1316,6 +1631,60 @@ class MasjidMapViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun setWidgetCustomTitle(title: String) {
         viewModelScope.launch { prefs.setWidgetCustomTitle(title) }
+    }
+
+    fun shiftHomeDate(deltaDays: Int) {
+        val current = _uiState.value
+        val nextOffset = (current.selectedHomeDateOffsetDays + deltaDays).coerceIn(-365, 365)
+        applyHomeDateOffset(nextOffset)
+    }
+
+    fun resetHomeDateToToday() {
+        applyHomeDateOffset(0)
+    }
+
+    private fun applyHomeDateOffset(offsetDays: Int) {
+        val state = _uiState.value
+        val ref = state.userLocation ?: state.mapCenter ?: LatLngPoint(21.4225, 39.8262)
+        val now = System.currentTimeMillis()
+        val targetDayMillis = now + offsetDays * 86_400_000L
+        val schedule = PrayerTimeCalculator.calculateSchedule(
+            latitude = ref.latitude,
+            longitude = ref.longitude,
+            nowMillis = targetDayMillis,
+            method = state.calculationMethod,
+            madhab = state.asrMadhab
+        )
+        val solarHorizon = PrayerTimeCalculator.calculateSolarHorizonState(
+            latitude = ref.latitude,
+            longitude = ref.longitude,
+            dayMillis = targetDayMillis,
+            nowMillis = now,
+            isSelectedDayToday = offsetDays == 0,
+            method = state.calculationMethod,
+            madhab = state.asrMadhab
+        )
+        _uiState.update {
+            it.copy(
+                selectedHomeDateOffsetDays = offsetDays,
+                homePrayerSchedule = schedule,
+                homeSolarHorizon = solarHorizon,
+                homeSelectedDateLabel = formatHomeDateLabel(offsetDays, targetDayMillis),
+                homeSelectedHijri = IslamicCalendar.todayHijri(targetDayMillis)
+            )
+        }
+    }
+
+    private fun formatHomeDateLabel(offsetDays: Int, targetMillis: Long): String = when (offsetDays) {
+        0 -> "Today"
+        1 -> "Tomorrow"
+        -1 -> "Yesterday"
+        else -> java.text.SimpleDateFormat("EEE, MMM d", java.util.Locale.getDefault())
+            .format(java.util.Date(targetMillis))
+    }
+
+    fun setTajwidEnabled(enabled: Boolean) {
+        viewModelScope.launch { prefs.setTajwidEnabled(enabled) }
     }
 
     fun clearError() {

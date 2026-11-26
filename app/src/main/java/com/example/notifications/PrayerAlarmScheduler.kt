@@ -17,6 +17,7 @@ import androidx.core.content.ContextCompat
 import com.example.MainActivity
 import com.example.R
 import com.example.data.AdhanAudioPlayer
+import com.example.data.BookmarksAndMasjidExtrasRepository
 import com.example.data.UserPreferencesRepository
 import com.example.data.UserSettings
 import com.example.domain.GeoFormatters
@@ -37,6 +38,8 @@ object PrayerAlarmScheduler {
 
     const val NOTIFICATION_ID_ONGOING = 4200
     private const val REQUEST_CODE_SUHOOR = 4110
+    private const val REQUEST_CODE_TAHAJJUD = 4115
+    private const val REQUEST_CODE_LEAVE_MASJID = 4120
     private const val REQUEST_CODE_RESTORE_DND = 4190
 
     private val alertPrayers = listOf(
@@ -154,6 +157,10 @@ object PrayerAlarmScheduler {
             madhab = settings.asrMadhab
         )
 
+        val extrasRepo = BookmarksAndMasjidExtrasRepository.getInstance(context)
+        val homeMasjid = extrasRepo.homeMasjid.value
+        val homeIqamahMap = homeMasjid?.let { extrasRepo.iqamahByMasjid.value[it.id] }.orEmpty()
+
         if (settings.notificationsEnabled) {
             alertPrayers.forEachIndexed { idx, prayer ->
                 if (!settings.isPrayerAlertEnabled(prayer)) return@forEachIndexed
@@ -171,6 +178,7 @@ object PrayerAlarmScheduler {
                 } ?: return@forEachIndexed
 
                 val (entry, triggerAtMillis) = chosenEntry
+                val iqamahText = homeIqamahMap[prayer]
                 val intent = Intent(context, PrayerAlarmReceiver::class.java).apply {
                     putExtra(PrayerAlarmReceiver.EXTRA_PRAYER_NAME, prayer.displayName)
                     putExtra(PrayerAlarmReceiver.EXTRA_PRAYER_TIME, entry.formattedTime)
@@ -178,6 +186,8 @@ object PrayerAlarmScheduler {
                     putExtra(PrayerAlarmReceiver.EXTRA_SOUND_ID, settings.alertSound.id)
                     putExtra(PrayerAlarmReceiver.EXTRA_NOTIFICATION_ID, 4100 + idx)
                     putExtra(PrayerAlarmReceiver.EXTRA_AUTO_DND, settings.autoDndAtPrayer)
+                    putExtra(PrayerAlarmReceiver.EXTRA_HOME_MASJID_NAME, homeMasjid?.name)
+                    putExtra(PrayerAlarmReceiver.EXTRA_IQAMAH_TIME, iqamahText)
                     putExtra(
                         PrayerAlarmReceiver.EXTRA_FAJR_FADE_IN,
                         prayer == PrayerName.FAJR && settings.reminderLeadMinutes == 0 && settings.fajrFadeInAlarmEnabled
@@ -232,6 +242,92 @@ object PrayerAlarmScheduler {
                 )
                 runCatching {
                     alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerMs, pi)
+                }
+            }
+        }
+
+        if (settings.tahajjudAlarmEnabled) {
+            val todayWindows = PrayerTimeCalculator.calculateNightWorshipWindows(
+                latitude = loc.latitude,
+                longitude = loc.longitude,
+                nowMillis = now,
+                method = settings.calculationMethod,
+                madhab = settings.asrMadhab
+            )
+            val tomorrowWindows = PrayerTimeCalculator.calculateNightWorshipWindows(
+                latitude = loc.latitude,
+                longitude = loc.longitude,
+                nowMillis = now + 86_400_000L,
+                method = settings.calculationMethod,
+                madhab = settings.asrMadhab
+            )
+            val offsetMs = settings.tahajjudOffsetMinutes * 60_000L
+            val todayTrigger = todayWindows.lastThirdStartMillis + offsetMs
+            val chosenPair = if (todayTrigger > now + 15_000L) {
+                todayWindows to todayTrigger
+            } else {
+                tomorrowWindows to (tomorrowWindows.lastThirdStartMillis + offsetMs)
+            }
+            val (windows, triggerMs) = chosenPair
+            if (triggerMs > now + 15_000L) {
+                val intent = Intent(context, PrayerAlarmReceiver::class.java).apply {
+                    putExtra(PrayerAlarmReceiver.EXTRA_PRAYER_NAME, "Tahajjud")
+                    putExtra(PrayerAlarmReceiver.EXTRA_PRAYER_TIME, windows.lastThirdStartFormatted)
+                    putExtra(PrayerAlarmReceiver.EXTRA_LEAD_MINUTES, settings.tahajjudOffsetMinutes)
+                    putExtra(PrayerAlarmReceiver.EXTRA_SOUND_ID, settings.alertSound.id)
+                    putExtra(PrayerAlarmReceiver.EXTRA_NOTIFICATION_ID, REQUEST_CODE_TAHAJJUD)
+                    putExtra(PrayerAlarmReceiver.EXTRA_IS_TAHAJJUD, true)
+                }
+                val pi = PendingIntent.getBroadcast(
+                    context,
+                    REQUEST_CODE_TAHAJJUD,
+                    intent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+                runCatching {
+                    alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerMs, pi)
+                }
+            }
+        }
+
+        if (settings.leaveForMasjidReminderEnabled && homeMasjid != null) {
+            val straightDist = PrayerTimeCalculator.distanceMeters(loc, homeMasjid.location)
+            val fallbackMetrics = GeoFormatters.fallbackRoadMetrics(straightDist, settings.travelMode)
+            val travelMinutes = (fallbackMetrics.durationSeconds / 60).coerceAtLeast(1)
+            val countdown = PrayerTimeCalculator.computeLeaveForMasjidCountdown(
+                masjidName = homeMasjid.name,
+                schedule = today,
+                iqamahTimes = homeIqamahMap,
+                travelMinutes = travelMinutes,
+                prepMinutes = settings.leaveForMasjidPrepMinutes,
+                nowMillis = now
+            )
+            if (countdown != null) {
+                val leaveTriggerMs = countdown.targetTimeMillis -
+                    (countdown.travelMinutes + countdown.prepMinutes) * 60_000L
+                if (leaveTriggerMs > now + 15_000L) {
+                    val intent = Intent(context, PrayerAlarmReceiver::class.java).apply {
+                        putExtra(PrayerAlarmReceiver.EXTRA_PRAYER_NAME, countdown.prayerName.displayName)
+                        putExtra(
+                            PrayerAlarmReceiver.EXTRA_PRAYER_TIME,
+                            countdown.iqamahFormatted ?: countdown.adhanFormatted
+                        )
+                        putExtra(PrayerAlarmReceiver.EXTRA_LEAD_MINUTES, countdown.travelMinutes)
+                        putExtra(PrayerAlarmReceiver.EXTRA_SOUND_ID, settings.alertSound.id)
+                        putExtra(PrayerAlarmReceiver.EXTRA_NOTIFICATION_ID, REQUEST_CODE_LEAVE_MASJID)
+                        putExtra(PrayerAlarmReceiver.EXTRA_IS_LEAVE_MASJID, true)
+                        putExtra(PrayerAlarmReceiver.EXTRA_HOME_MASJID_NAME, homeMasjid.name)
+                        putExtra(PrayerAlarmReceiver.EXTRA_IQAMAH_TIME, countdown.iqamahFormatted)
+                    }
+                    val pi = PendingIntent.getBroadcast(
+                        context,
+                        REQUEST_CODE_LEAVE_MASJID,
+                        intent,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+                    runCatching {
+                        alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, leaveTriggerMs, pi)
+                    }
                 }
             }
         }
@@ -313,6 +409,8 @@ object PrayerAlarmScheduler {
             cancelRequestCode(context, alarmManager, 4100 + idx)
         }
         cancelRequestCode(context, alarmManager, REQUEST_CODE_SUHOOR)
+        cancelRequestCode(context, alarmManager, REQUEST_CODE_TAHAJJUD)
+        cancelRequestCode(context, alarmManager, REQUEST_CODE_LEAVE_MASJID)
     }
 
     private fun cancelRequestCode(context: Context, alarmManager: AlarmManager, requestCode: Int) {

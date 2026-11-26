@@ -235,8 +235,102 @@ object PrayerTimeCalculator {
             iftarMillis = maghrib.timeMillis,
             midnightFormatted = formatter.format(Date(midnightMs)),
             lastThirdStartFormatted = formatter.format(Date(lastThirdStartMs)),
+            lastThirdStartMillis = lastThirdStartMs,
             nextFastEventLabel = nextFastLabel,
             millisUntilFastEvent = (nextFastTargetMs - nowMillis).coerceAtLeast(0L)
+        )
+    }
+
+    /**
+     * Computes daylight solar progress along the horizon plus the three canonical Makruh/prohibited
+     * Nafl prayer windows: Post-Sunrise (Tulu' +15m), Solar Zenith (Zawal -10m), and Pre-Sunset (Ghuroob -15m).
+     */
+    fun calculateSolarHorizonState(
+        latitude: Double,
+        longitude: Double,
+        dayMillis: Long = System.currentTimeMillis(),
+        nowMillis: Long = System.currentTimeMillis(),
+        isSelectedDayToday: Boolean = true,
+        method: CalculationMethod = CalculationMethod.ISNA,
+        madhab: AsrMadhab = AsrMadhab.STANDARD,
+        timeZone: TimeZone = TimeZone.getDefault()
+    ): SolarHorizonState {
+        val schedule = calculateSchedule(latitude, longitude, dayMillis, method, madhab, timeZone)
+        val formatter = SimpleDateFormat("h:mm a", Locale.getDefault()).apply {
+            this.timeZone = timeZone
+        }
+        val sunriseMs = schedule.entries.first { it.name == PrayerName.SUNRISE }.timeMillis
+        val dhuhrMs = schedule.entries.first { it.name == PrayerName.DHUHR }.timeMillis
+        val maghribMs = schedule.entries.first { it.name == PrayerName.MAGHRIB }.timeMillis
+
+        val daylightSpan = (maghribMs - sunriseMs).coerceAtLeast(60_000L).toFloat()
+        fun dayFrac(ms: Long): Float = ((ms - sunriseMs).toFloat() / daylightSpan).coerceIn(0f, 1f)
+
+        val tuluStart = sunriseMs
+        val tuluEnd = sunriseMs + 15L * 60_000L
+        val zawalStart = dhuhrMs - 10L * 60_000L
+        val zawalEnd = dhuhrMs
+        val sunsetStart = maghribMs - 15L * 60_000L
+        val sunsetEnd = maghribMs
+
+        val windows = listOf(
+            ProhibitedPrayerWindow(
+                type = ProhibitedWindowType.SUNRISE,
+                startMillis = tuluStart,
+                endMillis = tuluEnd,
+                startFormatted = formatter.format(Date(tuluStart)),
+                endFormatted = formatter.format(Date(tuluEnd)),
+                startFractionOfDaylight = dayFrac(tuluStart),
+                endFractionOfDaylight = dayFrac(tuluEnd)
+            ),
+            ProhibitedPrayerWindow(
+                type = ProhibitedWindowType.ZAWAL,
+                startMillis = zawalStart,
+                endMillis = zawalEnd,
+                startFormatted = formatter.format(Date(zawalStart)),
+                endFormatted = formatter.format(Date(zawalEnd)),
+                startFractionOfDaylight = dayFrac(zawalStart),
+                endFractionOfDaylight = dayFrac(zawalEnd)
+            ),
+            ProhibitedPrayerWindow(
+                type = ProhibitedWindowType.SUNSET,
+                startMillis = sunsetStart,
+                endMillis = sunsetEnd,
+                startFormatted = formatter.format(Date(sunsetStart)),
+                endFormatted = formatter.format(Date(sunsetEnd)),
+                startFractionOfDaylight = dayFrac(sunsetStart),
+                endFractionOfDaylight = dayFrac(sunsetEnd)
+            )
+        )
+
+        val activeWindow = if (isSelectedDayToday) {
+            windows.firstOrNull { nowMillis in it.startMillis until it.endMillis }
+        } else {
+            null
+        }
+        val minsRemaining = if (activeWindow != null) {
+            (((activeWindow.endMillis - nowMillis) / 60_000L) + 1L).toInt().coerceAtLeast(1)
+        } else {
+            0
+        }
+
+        val isDaytime = nowMillis in sunriseMs..maghribMs
+        val sunFraction = when {
+            !isSelectedDayToday -> 0.5f
+            nowMillis <= sunriseMs -> 0f
+            nowMillis >= maghribMs -> 1f
+            else -> dayFrac(nowMillis)
+        }
+
+        return SolarHorizonState(
+            isDaytime = if (isSelectedDayToday) isDaytime else true,
+            sunFraction = sunFraction,
+            windows = windows,
+            activeWindow = activeWindow,
+            minutesUntilActiveWindowEnds = minsRemaining,
+            sunriseFormatted = formatter.format(Date(sunriseMs)),
+            dhuhrFormatted = formatter.format(Date(dhuhrMs)),
+            maghribFormatted = formatter.format(Date(maghribMs))
         )
     }
 
@@ -276,6 +370,130 @@ object PrayerTimeCalculator {
         var diff = ((toDeg - fromDeg + 540.0) % 360.0) - 180.0
         if (diff < -180.0) diff += 360.0
         return diff
+    }
+
+    /**
+     * Parses user-entered Iqamah time text (e.g. "5:15 AM", "1:30 PM", "13:30", or "1:30")
+     * onto the calendar day of [referenceAdhanMillis]. If AM/PM is omitted in 12-hour text,
+     * resolves AM/PM using [referenceAdhanMillis] so "1:30" for Dhuhr resolves to 1:30 PM.
+     */
+    fun parseIqamahTimeMillis(
+        timeStr: String?,
+        referenceAdhanMillis: Long,
+        timeZone: TimeZone = TimeZone.getDefault()
+    ): Long? {
+        val raw = timeStr?.trim()?.uppercase(Locale.US) ?: return null
+        if (raw.isBlank()) return null
+
+        val amPmExplicit = when {
+            raw.endsWith("AM") || raw.contains(" AM") -> true
+            raw.endsWith("PM") || raw.contains(" PM") -> false
+            else -> null
+        }
+        val cleaned = raw.replace("AM", "").replace("PM", "").trim()
+        val parts = cleaned.split(":")
+        if (parts.size != 2) return null
+        val parsedHour = parts[0].trim().toIntOrNull() ?: return null
+        val parsedMinute = parts[1].trim().toIntOrNull() ?: return null
+        if (parsedMinute !in 0..59) return null
+
+        val cal = Calendar.getInstance(timeZone).apply {
+            timeInMillis = referenceAdhanMillis
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+
+        val hour24: Int = when {
+            amPmExplicit == true -> {
+                if (parsedHour !in 1..12) return null
+                if (parsedHour == 12) 0 else parsedHour
+            }
+            amPmExplicit == false -> {
+                if (parsedHour !in 1..12) return null
+                if (parsedHour == 12) 12 else parsedHour + 12
+            }
+            parsedHour in 13..23 || parsedHour == 0 -> parsedHour
+            parsedHour in 1..12 -> {
+                // Infer AM/PM closest to referenceAdhanMillis (favoring at/after Adhan)
+                val amHour = if (parsedHour == 12) 0 else parsedHour
+                val pmHour = if (parsedHour == 12) 12 else parsedHour + 12
+                val amMillis = (cal.clone() as Calendar).apply {
+                    set(Calendar.HOUR_OF_DAY, amHour)
+                    set(Calendar.MINUTE, parsedMinute)
+                }.timeInMillis
+                val pmMillis = (cal.clone() as Calendar).apply {
+                    set(Calendar.HOUR_OF_DAY, pmHour)
+                    set(Calendar.MINUTE, parsedMinute)
+                }.timeInMillis
+                val amDiff = amMillis - referenceAdhanMillis
+                val pmDiff = pmMillis - referenceAdhanMillis
+                when {
+                    amDiff >= -30 * 60_000L && pmDiff >= -30 * 60_000L -> if (amDiff <= pmDiff) amHour else pmHour
+                    amDiff >= -30 * 60_000L -> amHour
+                    pmDiff >= -30 * 60_000L -> pmHour
+                    abs(amDiff) <= abs(pmDiff) -> amHour
+                    else -> pmHour
+                }
+            }
+            else -> return null
+        }
+
+        cal.set(Calendar.HOUR_OF_DAY, hour24)
+        cal.set(Calendar.MINUTE, parsedMinute)
+        return cal.timeInMillis
+    }
+
+    fun computeLeaveForMasjidCountdown(
+        masjidName: String,
+        schedule: PrayerSchedule,
+        iqamahTimes: Map<PrayerName, String>,
+        travelMinutes: Int,
+        prepMinutes: Int = 5,
+        nowMillis: Long = System.currentTimeMillis(),
+        timeZone: TimeZone = TimeZone.getDefault()
+    ): LeaveCountdownInfo? {
+        val safeTravel = travelMinutes.coerceAtLeast(1)
+        val safePrep = prepMinutes.coerceIn(0, 30)
+
+        // Pick earliest today obligatory prayer whose Iqamah (if set) or Adhan is still in the future
+        val candidateEntry = schedule.entries
+            .filter { it.name != PrayerName.SUNRISE }
+            .mapNotNull { entry ->
+                val iqamahStr = iqamahTimes[entry.name]?.takeIf { it.isNotBlank() }
+                val iqamahMs = parseIqamahTimeMillis(iqamahStr, entry.timeMillis, timeZone)
+                val targetMs = iqamahMs ?: entry.timeMillis
+                if (targetMs > nowMillis) {
+                    Triple(entry, iqamahStr, targetMs)
+                } else {
+                    null
+                }
+            }
+            .minByOrNull { it.third }
+
+        val (targetEntry, iqamahStr, targetMillis) = if (candidateEntry != null) {
+            candidateEntry
+        } else {
+            val next = schedule.nextPrayer ?: return null
+            val iqamahStr = iqamahTimes[next.name]?.takeIf { it.isNotBlank() }
+            val iqamahMs = parseIqamahTimeMillis(iqamahStr, next.timeMillis, timeZone)
+            Triple(next, iqamahStr, iqamahMs ?: next.timeMillis)
+        }
+
+        val leaveAtMillis = targetMillis - (safeTravel + safePrep) * 60_000L
+        val leaveInMinutes = ((leaveAtMillis - nowMillis) / 60_000L)
+        val shouldLeaveNow = leaveInMinutes <= 0L && nowMillis < targetMillis
+
+        return LeaveCountdownInfo(
+            masjidName = masjidName,
+            prayerName = targetEntry.name,
+            adhanFormatted = targetEntry.formattedTime,
+            iqamahFormatted = iqamahStr,
+            targetTimeMillis = targetMillis,
+            travelMinutes = safeTravel,
+            prepMinutes = safePrep,
+            leaveInMinutes = leaveInMinutes,
+            shouldLeaveNow = shouldLeaveNow
+        )
     }
 
     private fun julianDate(year: Int, month: Int, day: Int): Double {

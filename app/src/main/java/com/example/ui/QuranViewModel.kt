@@ -12,8 +12,10 @@ import com.example.domain.JuzInfo
 import com.example.domain.QuranBookmark
 import com.example.domain.QuranReciterOption
 import com.example.domain.QuranSearchHit
+import com.example.domain.QuranTajwidEngine
 import com.example.domain.QuranTranslationOption
 import com.example.domain.QuranVerse
+import com.example.domain.QuranWordAnalysis
 import com.example.domain.RecitationLanguage
 import com.example.domain.SleepTimerOption
 import com.example.domain.SurahCatalog
@@ -43,6 +45,7 @@ data class QuranUiState(
     val cachedSurahNumbers: Set<Int> = emptySet(),
     val showOnlyOffline: Boolean = false,
     val arabicOnlyMode: Boolean = false,
+    val tajwidEnabled: Boolean = false,
     val bookmarks: List<QuranBookmark> = emptyList(),
     val lastReadSurah: Int = 1,
     val lastReadAyah: Int = 1,
@@ -54,12 +57,19 @@ data class QuranUiState(
     val activeSurahContent: SurahContent? = null,
     val isLoadingSurah: Boolean = false,
     val errorMessage: String? = null,
+    // Dedicated Listening Page & Word-by-Word Lookup State
+    val isListeningPageVisible: Boolean = false,
+    val listeningSurahContent: SurahContent? = null,
+    val selectedWordAnalysis: QuranWordAnalysis? = null,
+    val selectedWordVerseRef: Pair<Int, Int>? = null,
     // Audio Recitation & Sleep Timer State
     val playingSurah: Int? = null,
     val playingAyah: Int? = null,
     val isPlayingAudio: Boolean = false,
     val isBufferingAudio: Boolean = false,
     val audioProgressFraction: Float = 0f,
+    val audioPositionMs: Long = 0L,
+    val audioDurationMs: Long = 0L,
     val playbackSpeed: Float = 1.0f,
     val autoAdvanceAyah: Boolean = true,
     val sleepTimerOption: SleepTimerOption = SleepTimerOption.OFF,
@@ -86,6 +96,8 @@ class QuranViewModel(application: Application) : AndroidViewModel(application) {
     private var verseSearchJob: Job? = null
     private var audioDownloadJob: Job? = null
     private var essentialAudioDownloadJob: Job? = null
+    private var listeningLoadJob: Job? = null
+    private val wbwCacheBySurah = mutableMapOf<Int, Map<Int, List<Pair<String, String?>>>>()
 
     private val _uiState = MutableStateFlow(
         QuranUiState(
@@ -106,11 +118,15 @@ class QuranViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             playbackController.snapshot.collect { snap ->
                 val activeSurah = _uiState.value.activeSurahContent?.surah
-                val cachedAudioCount = if (activeSurah != null) {
-                    audioPlayer.getCachedAyahCount(_uiState.value.selectedReciter, activeSurah.number, activeSurah.ayahCount)
+                val playingSurahNum = snap.playingSurah
+                val cachedTargetSurah = playingSurahNum?.let { SurahCatalog.byNumber(it) } ?: activeSurah
+                val cachedAudioCount = if (cachedTargetSurah != null) {
+                    audioPlayer.getCachedAyahCount(_uiState.value.selectedReciter, cachedTargetSurah.number, cachedTargetSurah.ayahCount)
                 } else {
                     _uiState.value.cachedAudioAyahsForActiveSurah
                 }
+                val needsListeningLoad = playingSurahNum != null &&
+                    _uiState.value.listeningSurahContent?.surah?.number != playingSurahNum
                 _uiState.update {
                     it.copy(
                         playingSurah = snap.playingSurah,
@@ -118,13 +134,20 @@ class QuranViewModel(application: Application) : AndroidViewModel(application) {
                         isPlayingAudio = snap.isPlaying,
                         isBufferingAudio = snap.isBuffering,
                         audioProgressFraction = snap.progressFraction,
+                        audioPositionMs = snap.positionMs,
+                        audioDurationMs = snap.durationMs,
                         playbackSpeed = snap.playbackSpeed,
                         autoAdvanceAyah = snap.autoAdvanceAyah,
                         sleepTimerOption = snap.sleepTimerOption,
                         sleepTimerRemainingSec = snap.sleepTimerRemainingSec,
                         cachedAudioAyahsForActiveSurah = cachedAudioCount,
-                        audioErrorMessage = snap.errorMessage
+                        audioErrorMessage = snap.errorMessage,
+                        isListeningPageVisible = if (playingSurahNum == null) false else it.isListeningPageVisible,
+                        listeningSurahContent = if (playingSurahNum == null) null else it.listeningSurahContent
                     )
+                }
+                if (needsListeningLoad && playingSurahNum != null) {
+                    ensureListeningContentLoaded(playingSurahNum, _uiState.value.selectedTranslation)
                 }
             }
         }
@@ -150,6 +173,7 @@ class QuranViewModel(application: Application) : AndroidViewModel(application) {
                         cachedAudioReciterIds = audioPlayer.getCachedReciterIds(),
                         audioCacheBytes = audioPlayer.getCacheSizeBytes(),
                         arabicOnlyMode = settings.arabicOnlyQuran,
+                        tajwidEnabled = settings.tajwidEnabled,
                         lastReadSurah = settings.lastReadSurah,
                         lastReadAyah = settings.lastReadAyah,
                         surahs = filterSurahs(it.searchQuery, it.showOnlyOffline, cached)
@@ -157,6 +181,10 @@ class QuranViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 if (prev != settings.quranTranslation && activeSurah != null) {
                     openSurah(activeSurah.number, _uiState.value.targetScrollAyah, settings.quranTranslation)
+                }
+                val listeningSurah = _uiState.value.listeningSurahContent?.surah?.number
+                if (prev != settings.quranTranslation && listeningSurah != null) {
+                    ensureListeningContentLoaded(listeningSurah, settings.quranTranslation)
                 }
             }
         }
@@ -169,6 +197,102 @@ class QuranViewModel(application: Application) : AndroidViewModel(application) {
     fun toggleArabicOnlyMode() {
         val next = !_uiState.value.arabicOnlyMode
         viewModelScope.launch { prefs.setArabicOnlyQuran(next) }
+    }
+
+    fun toggleTajwidEnabled() {
+        val next = !_uiState.value.tajwidEnabled
+        viewModelScope.launch { prefs.setTajwidEnabled(next) }
+    }
+
+    fun openListeningPage() {
+        if (_uiState.value.playingSurah != null) {
+            _uiState.update { it.copy(isListeningPageVisible = true) }
+        }
+    }
+
+    fun closeListeningPage() {
+        _uiState.update { it.copy(isListeningPageVisible = false) }
+    }
+
+    private fun ensureListeningContentLoaded(
+        surahNumber: Int,
+        translation: QuranTranslationOption
+    ) {
+        val active = _uiState.value.activeSurahContent
+        if (active != null && active.surah.number == surahNumber && active.translation == translation) {
+            _uiState.update { it.copy(listeningSurahContent = active) }
+            prefetchWordByWord(surahNumber)
+            return
+        }
+        listeningLoadJob?.cancel()
+        listeningLoadJob = viewModelScope.launch {
+            runCatching {
+                repository.loadSurah(surahNumber, translation)
+            }.onSuccess { loaded ->
+                _uiState.update { it.copy(listeningSurahContent = loaded) }
+                prefetchWordByWord(surahNumber)
+            }
+        }
+    }
+
+    private fun prefetchWordByWord(surahNumber: Int) {
+        if (wbwCacheBySurah.containsKey(surahNumber)) return
+        viewModelScope.launch {
+            val wbw = repository.fetchWordByWordForChapter(surahNumber)
+            if (wbw.isNotEmpty()) {
+                wbwCacheBySurah[surahNumber] = wbw
+            }
+        }
+    }
+
+    fun inspectArabicWord(verse: QuranVerse, wordIndex: Int, surfaceWord: String) {
+        val chapterWbw = wbwCacheBySurah[verse.chapter]
+        val wordPair = chapterWbw?.get(verse.verse)?.getOrNull(wordIndex)
+        val analysis = QuranTajwidEngine.analyzeArabicWordOffline(
+            word = surfaceWord,
+            wordIndex = wordIndex,
+            apiGloss = wordPair?.first?.takeIf { it.isNotBlank() },
+            apiTranslit = wordPair?.second
+        )
+        _uiState.update {
+            it.copy(
+                selectedWordAnalysis = analysis,
+                selectedWordVerseRef = verse.chapter to verse.verse
+            )
+        }
+        if (chapterWbw == null) {
+            viewModelScope.launch {
+                val fetched = repository.fetchWordByWordForChapter(verse.chapter)
+                if (fetched.isNotEmpty()) {
+                    wbwCacheBySurah[verse.chapter] = fetched
+                    val currentRef = _uiState.value.selectedWordVerseRef
+                    val currentAnalysis = _uiState.value.selectedWordAnalysis
+                    if (currentRef == (verse.chapter to verse.verse) &&
+                        currentAnalysis?.wordIndex == wordIndex
+                    ) {
+                        val updatedPair = fetched[verse.verse]?.getOrNull(wordIndex)
+                        if (updatedPair != null) {
+                            _uiState.update {
+                                it.copy(
+                                    selectedWordAnalysis = QuranTajwidEngine.analyzeArabicWordOffline(
+                                        word = surfaceWord,
+                                        wordIndex = wordIndex,
+                                        apiGloss = updatedPair.first.takeIf { g -> g.isNotBlank() },
+                                        apiTranslit = updatedPair.second
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fun dismissWordAnalysis() {
+        _uiState.update {
+            it.copy(selectedWordAnalysis = null, selectedWordVerseRef = null)
+        }
     }
 
     fun onSearchQueryChanged(query: String) {
@@ -283,17 +407,27 @@ class QuranViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun togglePlayAyah(surahNumber: Int, ayahNumber: Int) {
-        playbackController.togglePlayAyah(surahNumber, ayahNumber, _uiState.value.selectedReciter)
+        val state = _uiState.value
+        val isPausingSameAyah = state.playingSurah == surahNumber &&
+            state.playingAyah == ayahNumber &&
+            state.isPlayingAudio
+        if (!isPausingSameAyah) {
+            _uiState.update { it.copy(isListeningPageVisible = true) }
+        }
+        playbackController.togglePlayAyah(surahNumber, ayahNumber, state.selectedReciter)
     }
 
     fun togglePlayPauseSurah() {
         val state = _uiState.value
-        val activeSurah = state.activeSurahContent?.surah
+        val activeSurah = state.activeSurahContent?.surah ?: state.listeningSurahContent?.surah
         val fallbackSurah = activeSurah?.number ?: state.playingSurah
         val fallbackAyah = if (activeSurah != null && state.lastReadSurah == activeSurah.number && state.lastReadAyah in 1..activeSurah.ayahCount) {
             state.lastReadAyah
         } else {
             1
+        }
+        if (!state.isPlayingAudio && !state.isBufferingAudio && fallbackSurah != null) {
+            _uiState.update { it.copy(isListeningPageVisible = true) }
         }
         playbackController.togglePlayPause(
             fallbackSurah = fallbackSurah,
@@ -310,6 +444,10 @@ class QuranViewModel(application: Application) : AndroidViewModel(application) {
         playbackController.playPreviousAyah()
     }
 
+    fun seekAudioFraction(fraction: Float) {
+        playbackController.seekToFraction(fraction)
+    }
+
     fun cyclePlaybackSpeed() {
         playbackController.cycleSpeed()
     }
@@ -323,6 +461,7 @@ class QuranViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun stopAudio() {
+        _uiState.update { it.copy(isListeningPageVisible = false) }
         playbackController.stopAudio()
     }
 
@@ -332,7 +471,10 @@ class QuranViewModel(application: Application) : AndroidViewModel(application) {
 
     fun downloadActiveSurahAudio() {
         val state = _uiState.value
-        val surah = state.activeSurahContent?.surah ?: return
+        val surah = state.activeSurahContent?.surah
+            ?: state.listeningSurahContent?.surah
+            ?: state.playingSurah?.let { SurahCatalog.byNumber(it) }
+            ?: return
         val reciter = state.selectedReciter
         if (state.isDownloadingSurahAudio) return
 
@@ -514,6 +656,7 @@ class QuranViewModel(application: Application) : AndroidViewModel(application) {
                         errorMessage = null
                     )
                 }
+                prefetchWordByWord(surahNumber)
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(

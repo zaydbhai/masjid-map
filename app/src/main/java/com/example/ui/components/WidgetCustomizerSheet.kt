@@ -49,6 +49,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.domain.GeoFormatters
+import com.example.domain.HadithCatalog
 import com.example.domain.HadithEntry
 import com.example.domain.HijriDate
 import com.example.domain.IslamicCalendar
@@ -60,6 +61,8 @@ import com.example.domain.WidgetThemePreset
 import com.example.domain.WidgetTileShape
 import com.example.widget.PrayerTimesWidgetReceiver
 import com.example.widget.computePrayerProgressPercent
+import com.example.widget.formatCurrentWidgetHeadline
+import com.example.widget.formatNextWidgetSummary
 import com.example.widget.formatWidgetTime
 import kotlin.math.roundToInt
 
@@ -472,7 +475,6 @@ private fun WidgetLivePreviewCard(
 
     val outerShape = RoundedCornerShape(widgetTileShape.outerRadiusDp.dp)
     val innerShape = RoundedCornerShape(widgetTileShape.innerRadiusDp.dp)
-    val next = schedule.nextPrayer
     val sunriseEntry = schedule.entries.firstOrNull { it.name == PrayerName.SUNRISE }
     val entries = if (widgetShowSunrise) schedule.entries else schedule.entries.filter { it.name != PrayerName.SUNRISE }
     val progress = computePrayerProgressPercent(schedule, System.currentTimeMillis())
@@ -504,11 +506,9 @@ private fun WidgetLivePreviewCard(
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Text(
-                            text = if (next != null) {
-                                "${next.name.displayName} ${formatWidgetTime(next, widgetUse24Hour)}"
-                            } else schedule.currentPrayerLabel,
+                            text = formatCurrentWidgetHeadline(schedule, widgetUse24Hour),
                             color = primaryFg,
-                            fontSize = 15.sp,
+                            fontSize = 16.sp,
                             fontWeight = FontWeight.Bold,
                             maxLines = 1
                         )
@@ -516,18 +516,18 @@ private fun WidgetLivePreviewCard(
                             modifier = Modifier
                                 .clip(innerShape)
                                 .background(accentBg)
-                                .padding(horizontal = 7.dp, vertical = 2.dp)
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
                         ) {
                             Text(
-                                text = GeoFormatters.formatCountdown(schedule.minutesUntilNext),
+                                text = "Now",
                                 color = accentFg,
-                                fontSize = 10.sp,
+                                fontSize = 9.sp,
                                 fontWeight = FontWeight.Bold
                             )
                         }
                     }
                     val subtitle = buildList {
-                        add("Now: ${schedule.currentPrayerLabel}")
+                        add(formatNextWidgetSummary(schedule, widgetUse24Hour, compact = false))
                         if (widgetShowHijri) add("${hijri.day} ${hijri.monthName}")
                         if (widgetShowSunrise && sunriseEntry != null) {
                             add("☀ ${formatWidgetTime(sunriseEntry, widgetUse24Hour)}")
@@ -652,10 +652,10 @@ private fun WidgetLivePreviewCard(
                         .padding(horizontal = 9.dp, vertical = 6.dp)
                 ) {
                     Text(
-                        text = "“${dailyHadith.englishText}”",
+                        text = "“${HadithCatalog.stripIsnadForWidget(dailyHadith.englishText)}”",
                         color = primaryFg,
                         fontSize = 10.sp,
-                        maxLines = 2,
+                        maxLines = 3,
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(

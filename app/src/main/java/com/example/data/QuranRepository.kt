@@ -339,6 +339,92 @@ class QuranRepository(private val context: Context) {
         hits
     }
 
+    /**
+     * Fetches and caches per-word English glosses & transliterations from Quran.com v4 API when
+     * online; silently returns cached data or empty map when offline so offline morphological
+     * root lookup always works without errors.
+     */
+    suspend fun fetchWordByWordForChapter(
+        surahNumber: Int
+    ): Map<Int, List<Pair<String, String?>>> = withContext(Dispatchers.IO) {
+        val cacheFile = File(cacheDir, "wbw_en_$surahNumber.json")
+        if (cacheFile.exists()) {
+            val parsed = runCatching { parseWbwCacheJson(cacheFile.readText()) }.getOrNull()
+            if (!parsed.isNullOrEmpty()) return@withContext parsed
+        }
+        if (!networkMonitor.isCurrentlyOnline()) return@withContext emptyMap()
+
+        runCatching {
+            val url =
+                "https://api.quran.com/api/v4/verses/by_chapter/$surahNumber?language=en&words=true&word_fields=text_uthmani&per_page=300"
+            val req = Request.Builder().url(url).build()
+            NetworkClients.okHttpClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext emptyMap()
+                val body = resp.body?.string() ?: return@withContext emptyMap()
+                val parsed = parseWbwApiJson(body)
+                if (parsed.isNotEmpty()) {
+                    val serialized = JSONObject()
+                    parsed.forEach { (verseNum, pairs) ->
+                        val arr = JSONArray()
+                        pairs.forEach { (gloss, translit) ->
+                            arr.put(
+                                JSONObject()
+                                    .put("g", gloss)
+                                    .put("t", translit.orEmpty())
+                            )
+                        }
+                        serialized.put(verseNum.toString(), arr)
+                    }
+                    cacheFile.writeText(serialized.toString())
+                }
+                parsed
+            }
+        }.getOrDefault(emptyMap())
+    }
+
+    private fun parseWbwCacheJson(raw: String): Map<Int, List<Pair<String, String?>>> {
+        val obj = JSONObject(raw)
+        val out = LinkedHashMap<Int, List<Pair<String, String?>>>()
+        val keys = obj.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            val vNum = key.toIntOrNull() ?: continue
+            val arr = obj.optJSONArray(key) ?: continue
+            val list = ArrayList<Pair<String, String?>>(arr.length())
+            for (i in 0 until arr.length()) {
+                val item = arr.getJSONObject(i)
+                val gloss = item.optString("g")
+                val translit = item.optString("t").takeIf { it.isNotBlank() }
+                list.add(gloss to translit)
+            }
+            out[vNum] = list
+        }
+        return out
+    }
+
+    private fun parseWbwApiJson(raw: String): Map<Int, List<Pair<String, String?>>> {
+        val root = JSONObject(raw)
+        val verses = root.optJSONArray("verses") ?: return emptyMap()
+        val out = LinkedHashMap<Int, List<Pair<String, String?>>>(verses.length())
+        for (i in 0 until verses.length()) {
+            val vObj = verses.getJSONObject(i)
+            val vNum = vObj.optInt("verse_number", 0)
+            if (vNum <= 0) continue
+            val words = vObj.optJSONArray("words") ?: continue
+            val list = ArrayList<Pair<String, String?>>()
+            for (w in 0 until words.length()) {
+                val wObj = words.getJSONObject(w)
+                if (wObj.optString("char_type_name") == "end") continue
+                val gloss = wObj.optJSONObject("translation")?.optString("text").orEmpty()
+                val translit = wObj.optJSONObject("transliteration")?.optString("text")
+                    ?.takeIf { it.isNotBlank() }
+                list.add(gloss to translit)
+            }
+            out[vNum] = list
+        }
+        return out
+    }
+
     companion object {
         const val DEFAULT_ARABIC_EDITION = "ara-quranuthmanihaf"
 

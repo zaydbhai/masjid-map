@@ -40,13 +40,16 @@ import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
 import com.example.MainActivity
+import com.example.data.BookmarksAndMasjidExtrasRepository
 import com.example.data.HadithRepository
 import com.example.data.UserPreferencesRepository
 import com.example.data.UserSettings
 import com.example.domain.GeoFormatters
+import com.example.domain.HadithCatalog
 import com.example.domain.HadithEntry
 import com.example.domain.HijriDate
 import com.example.domain.IslamicCalendar
+import com.example.domain.JumuahTimes
 import com.example.domain.LatLngPoint
 import com.example.domain.PrayerName
 import com.example.domain.PrayerSchedule
@@ -102,6 +105,12 @@ class PrayerTimesWidget : GlanceAppWidget() {
         val isJumuah = IslamicCalendar.isJumuah(nowMillis)
         val dailyHadith = HadithRepository(context).getCachedOrSeedDailyHadith()
         val progressPercent = computePrayerProgressPercent(schedule, nowMillis)
+        val extrasRepo = BookmarksAndMasjidExtrasRepository.getInstance(context)
+        val homeMasjid = extrasRepo.homeMasjid.value
+        val homeNextIqamah = homeMasjid?.let { hm ->
+            schedule.nextPrayer?.let { next -> extrasRepo.iqamahByMasjid.value[hm.id]?.get(next.name) }
+        }
+        val homeJumuah = homeMasjid?.let { hm -> extrasRepo.jumuahByMasjid.value[hm.id] }
 
         provideContent {
             GlanceTheme {
@@ -115,7 +124,9 @@ class PrayerTimesWidget : GlanceAppWidget() {
                     qiblaDeg = qiblaDegrees.roundToInt(),
                     qiblaCardinal = qiblaCardinal,
                     dailyHadith = dailyHadith,
-                    progressPercent = progressPercent
+                    progressPercent = progressPercent,
+                    homeNextIqamah = homeNextIqamah,
+                    homeJumuah = homeJumuah
                 )
             }
         }
@@ -277,7 +288,9 @@ private fun PrayerWidgetContent(
     qiblaDeg: Int,
     qiblaCardinal: String,
     dailyHadith: HadithEntry,
-    progressPercent: Int
+    progressPercent: Int,
+    homeNextIqamah: String? = null,
+    homeJumuah: JumuahTimes? = null
 ) {
     val size = LocalSize.current
     val isCompactBar = size.height < 110.dp
@@ -296,17 +309,24 @@ private fun PrayerWidgetContent(
 
     val openHomeAction = widgetActivityAction(context, PrayerTimesWidget.DEST_HOME)
     val openCustomizerAction = widgetActivityAction(context, PrayerTimesWidget.DEST_WIDGET_CUSTOMIZER)
+    val showBottomSection = !isCompactBar && settings.widgetBottomMode != WidgetBottomMode.COMPACT_ONLY
+    val showTiles = showBottomSection &&
+        (settings.widgetBottomMode == WidgetBottomMode.QUICK_TILES ||
+            settings.widgetBottomMode == WidgetBottomMode.BOTH)
+    val showHadith = showBottomSection &&
+        (settings.widgetBottomMode == WidgetBottomMode.DAILY_HADITH ||
+            (settings.widgetBottomMode == WidgetBottomMode.BOTH && isTall))
 
     Column(
         modifier = GlanceModifier
             .fillMaxSize()
             .background(palette.containerBg)
             .cornerRadius(outerRadius)
-            .padding(horizontal = 10.dp, vertical = if (isCompactBar) 7.dp else 9.dp)
+            .padding(horizontal = 10.dp, vertical = if (isCompactBar) 6.dp else 9.dp)
             .clickable(openHomeAction),
         verticalAlignment = Alignment.Vertical.Top
     ) {
-        // 1. Header Strip: Active / Next Prayer + Countdown + Badges + Customize/Refresh
+        // 1. Header Strip: Current Prayer (Large) + Next Prayer & Metadata (Small) + Customize/Refresh
         Row(
             modifier = GlanceModifier.fillMaxWidth(),
             verticalAlignment = Alignment.Vertical.CenterVertically
@@ -314,36 +334,35 @@ private fun PrayerWidgetContent(
             Column(modifier = GlanceModifier.defaultWeight()) {
                 Row(verticalAlignment = Alignment.Vertical.CenterVertically) {
                     Text(
-                        text = if (next != null) {
-                            "${next.name.displayName} ${formatWidgetTime(next, settings.widgetUse24Hour)}"
-                        } else {
-                            schedule.currentPrayerLabel
-                        },
+                        text = formatCurrentWidgetHeadline(schedule, settings.widgetUse24Hour),
                         style = TextStyle(
                             color = palette.primaryText,
-                            fontSize = if (isCompactBar) 13.sp else 15.sp,
+                            fontSize = if (isCompactBar) 13.sp else 16.sp,
                             fontWeight = FontWeight.Bold
                         ),
                         maxLines = 1
                     )
                     Spacer(modifier = GlanceModifier.width(6.dp))
                     Text(
-                        text = GeoFormatters.formatCountdown(schedule.minutesUntilNext),
+                        text = "Now",
                         style = TextStyle(
                             color = palette.accentFg,
-                            fontSize = 10.sp,
+                            fontSize = 9.sp,
                             fontWeight = FontWeight.Bold
                         ),
                         modifier = GlanceModifier
                             .background(palette.accentBg)
                             .cornerRadius(innerRadius)
-                            .padding(horizontal = 7.dp, vertical = 2.dp),
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
                         maxLines = 1
                     )
                     if (isJumuah && !isCompactBar) {
                         Spacer(modifier = GlanceModifier.width(4.dp))
+                        val jumuahBadge = homeJumuah?.takeIf { it.isConfigured }?.let {
+                            "Jumu'ah ${it.firstKhutbah.ifBlank { it.secondKhutbah }}"
+                        } ?: "Jumu'ah"
                         Text(
-                            text = "Jumu'ah",
+                            text = jumuahBadge,
                             style = TextStyle(
                                 color = palette.currentTileText,
                                 fontSize = 9.sp,
@@ -373,9 +392,16 @@ private fun PrayerWidgetContent(
                     }
                 }
 
-                if (!isCompactBar) {
-                    val subtitleParts = buildList {
-                        add("Now: ${schedule.currentPrayerLabel}")
+                val subtitleParts = buildList {
+                    add(
+                        formatNextWidgetSummary(
+                            schedule = schedule,
+                            use24Hour = settings.widgetUse24Hour,
+                            compact = isCompactBar,
+                            homeNextIqamah = homeNextIqamah
+                        )
+                    )
+                    if (!isCompactBar) {
                         if (settings.widgetShowHijri) {
                             add("${hijri.day} ${hijri.monthName}")
                         }
@@ -386,15 +412,15 @@ private fun PrayerWidgetContent(
                             add(locationLabel)
                         }
                     }
-                    Text(
-                        text = subtitleParts.joinToString(" · "),
-                        style = TextStyle(
-                            color = palette.secondaryText,
-                            fontSize = 10.sp
-                        ),
-                        maxLines = 1
-                    )
                 }
+                Text(
+                    text = subtitleParts.joinToString(" · "),
+                    style = TextStyle(
+                        color = palette.secondaryText,
+                        fontSize = if (isCompactBar) 9.sp else 10.sp
+                    ),
+                    maxLines = 1
+                )
             }
 
             Spacer(modifier = GlanceModifier.width(4.dp))
@@ -438,7 +464,11 @@ private fun PrayerWidgetContent(
             )
         }
 
-        Spacer(modifier = GlanceModifier.height(if (isCompactBar) 5.dp else 7.dp))
+        if (!isCompactBar && !showBottomSection) {
+            Spacer(modifier = GlanceModifier.defaultWeight())
+        } else {
+            Spacer(modifier = GlanceModifier.height(if (isCompactBar) 4.dp else 7.dp))
+        }
 
         // 3. Prayer Tiles Strip (fills width cleanly)
         val nextIndex = prayerTiles.indexOfFirst { it.isNext }
@@ -472,7 +502,7 @@ private fun PrayerWidgetContent(
                         .padding(horizontal = 1.5.dp)
                         .background(bg)
                         .cornerRadius(innerRadius)
-                        .padding(vertical = if (isCompactBar) 4.dp else 6.dp, horizontal = 2.dp),
+                        .padding(vertical = if (isCompactBar) 3.dp else 6.dp, horizontal = 2.dp),
                     horizontalAlignment = Alignment.Horizontal.CenterHorizontally
                 ) {
                     Text(
@@ -497,15 +527,14 @@ private fun PrayerWidgetContent(
             }
         }
 
-        // 4. Lower Customizable Section (fills the lower space with real utility!)
-        if (!isCompactBar && settings.widgetBottomMode != WidgetBottomMode.COMPACT_ONLY) {
-            val showTiles = settings.widgetBottomMode == WidgetBottomMode.QUICK_TILES ||
-                settings.widgetBottomMode == WidgetBottomMode.BOTH
-            val showHadith = settings.widgetBottomMode == WidgetBottomMode.DAILY_HADITH ||
-                (settings.widgetBottomMode == WidgetBottomMode.BOTH && isTall)
-
+        // 4. Lower Customizable Section (fills the lower space cleanly with zero dead void)
+        if (showBottomSection) {
             if (showTiles && settings.widgetQuickTiles.isNotEmpty()) {
-                Spacer(modifier = GlanceModifier.height(6.dp))
+                if (!showHadith) {
+                    Spacer(modifier = GlanceModifier.defaultWeight())
+                } else {
+                    Spacer(modifier = GlanceModifier.height(6.dp))
+                }
                 QuickTilesRow(
                     context = context,
                     settings = settings,
@@ -523,7 +552,12 @@ private fun PrayerWidgetContent(
                     hadith = dailyHadith,
                     palette = palette,
                     innerRadius = innerRadius,
-                    maxLines = if (isTall) 3 else 2
+                    maxLines = when {
+                        isTall && !showTiles -> 5
+                        isTall -> 3
+                        else -> 3
+                    },
+                    modifier = GlanceModifier.fillMaxWidth().defaultWeight()
                 )
             }
         }
@@ -537,8 +571,8 @@ private fun PrayerProgressBar(
     fillColor: ColorProvider,
     cornerRadiusDp: Dp
 ) {
-    val filledWeight = progressPercent.coerceIn(4, 96)
-    val remainingWeight = 100 - filledWeight
+    val filledBlocks = ((progressPercent + 5) / 10).coerceIn(1, 9)
+    val emptyBlocks = 10 - filledBlocks
 
     Row(
         modifier = GlanceModifier
@@ -547,16 +581,14 @@ private fun PrayerProgressBar(
             .background(trackColor)
             .cornerRadius(cornerRadiusDp)
     ) {
-        Box(
-            modifier = GlanceModifier
-                .defaultWeight()
-                .height(4.dp)
-                .background(fillColor)
-                .cornerRadius(cornerRadiusDp)
-        ) {}
-        // Proportional visual balance using weighted spacers where exact split isn't exposed;
-        // scale remaining steps using small discrete blocks if needed
-        val emptyBlocks = (remainingWeight / 20).coerceAtLeast(0)
+        repeat(filledBlocks) {
+            Box(
+                modifier = GlanceModifier
+                    .defaultWeight()
+                    .height(4.dp)
+                    .background(fillColor)
+            ) {}
+        }
         repeat(emptyBlocks) {
             Box(
                 modifier = GlanceModifier
@@ -657,24 +689,27 @@ private fun DailyHadithStrip(
     hadith: HadithEntry,
     palette: WidgetPalette,
     innerRadius: Dp,
-    maxLines: Int
+    maxLines: Int,
+    modifier: GlanceModifier = GlanceModifier.fillMaxWidth()
 ) {
+    val cleanHadith = HadithCatalog.stripIsnadForWidget(hadith.englishText)
     Column(
-        modifier = GlanceModifier
-            .fillMaxWidth()
+        modifier = modifier
             .background(palette.headerBandBg)
             .cornerRadius(innerRadius)
-            .padding(horizontal = 9.dp, vertical = 6.dp)
+            .padding(horizontal = 9.dp, vertical = 7.dp)
             .clickable(widgetActivityAction(context, PrayerTimesWidget.DEST_HADITH))
     ) {
         Text(
-            text = "“${hadith.englishText}”",
+            text = "“$cleanHadith”",
             style = TextStyle(
                 color = palette.primaryText,
                 fontSize = 10.sp
             ),
             maxLines = maxLines
         )
+        Spacer(modifier = GlanceModifier.defaultWeight())
+        Spacer(modifier = GlanceModifier.height(3.dp))
         Text(
             text = "${hadith.bookTitle} · ${hadith.reference.ifBlank { hadith.numberLabel }}",
             style = TextStyle(
@@ -695,6 +730,34 @@ private fun widgetActivityAction(context: Context, destination: String): Action 
             Intent.FLAG_ACTIVITY_CLEAR_TOP
     }
     return actionStartActivity(intent)
+}
+
+internal fun formatCurrentWidgetHeadline(schedule: PrayerSchedule, use24Hour: Boolean): String {
+    val current = schedule.entries.firstOrNull { it.isCurrent }
+    return when {
+        current == null -> "Isha (Night)"
+        current.name == PrayerName.SUNRISE ->
+            "Duha · ${formatWidgetTime(current, use24Hour)}"
+        else ->
+            "${current.name.displayName} ${formatWidgetTime(current, use24Hour)}"
+    }
+}
+
+internal fun formatNextWidgetSummary(
+    schedule: PrayerSchedule,
+    use24Hour: Boolean,
+    compact: Boolean = false,
+    homeNextIqamah: String? = null
+): String {
+    val next = schedule.nextPrayer ?: return schedule.currentPrayerLabel
+    val timeStr = formatWidgetTime(next, use24Hour, compact = compact)
+    val countdown = GeoFormatters.formatCountdown(schedule.minutesUntilNext)
+    val iqamahPart = if (!homeNextIqamah.isNullOrBlank() && !compact) {
+        " · Iq $homeNextIqamah"
+    } else {
+        ""
+    }
+    return "Next: ${next.name.displayName} $timeStr$iqamahPart ($countdown)"
 }
 
 internal fun formatWidgetTime(

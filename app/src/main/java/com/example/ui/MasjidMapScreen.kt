@@ -35,9 +35,12 @@ import androidx.compose.material.icons.automirrored.filled.Accessible
 import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.DoNotDisturbOn
 import androidx.compose.material.icons.filled.Explore
+import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.NearMe
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
@@ -47,6 +50,7 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -65,12 +69,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
+import com.example.domain.GeoFormatters
 import com.example.domain.Masjid
+import com.example.domain.NavigationProgress
 import com.example.domain.PrayerTimeCalculator
 import com.example.domain.TravelMode
 import com.example.ui.components.ActiveRouteCard
@@ -103,9 +110,10 @@ fun MasjidMapScreen(
     }
 
     BackHandler(
-        enabled = state.activeRoute != null || state.viewMode == ViewMode.LIST
+        enabled = state.isGuidedNavActive || state.activeRoute != null || state.viewMode == ViewMode.LIST
     ) {
         when {
+            state.isGuidedNavActive -> viewModel.stopInAppNavigation()
             state.activeRoute != null -> viewModel.clearRoute()
             state.viewMode == ViewMode.LIST -> viewModel.toggleViewMode(ViewMode.MAP)
         }
@@ -123,6 +131,7 @@ fun MasjidMapScreen(
                 selectedMasjid = state.selectedMasjid,
                 activeRoute = state.activeRoute,
                 recenterTick = state.recenterTick,
+                isGuidedNavActive = state.isGuidedNavActive,
                 onSelectMasjid = { viewModel.selectMasjid(it) },
                 onViewportMoved = viewModel::onMapViewportChanged,
                 modifier = Modifier.fillMaxSize()
@@ -154,7 +163,7 @@ fun MasjidMapScreen(
             }
         }
 
-        // Top Floating Search, Map/List Toggle & Quick Filter Chips
+        // Top Guidance Banner OR Floating Search, Map/List Toggle & Quick Filter Chips
         Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -163,52 +172,94 @@ fun MasjidMapScreen(
                 .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            TopSearchAndModeBar(
-                query = state.searchQuery,
-                viewMode = state.viewMode,
-                onQueryChange = viewModel::onSearchQueryChanged,
-                onSubmitSearch = {
-                    focusManager.clearFocus()
-                    viewModel.submitSearch()
-                },
-                onClearQuery = {
-                    viewModel.onSearchQueryChanged("")
-                    focusManager.clearFocus()
-                },
-                onToggleViewMode = {
-                    val next = if (state.viewMode == ViewMode.MAP) ViewMode.LIST else ViewMode.MAP
-                    viewModel.toggleViewMode(next)
-                },
-                onOpenSettings = viewModel::openSettingsSheet
-            )
+            val navProgress = state.navigationProgress
+            if (state.isGuidedNavActive && navProgress != null) {
+                InAppGuidanceBanner(
+                    progress = navProgress,
+                    destinationName = state.selectedMasjid?.name ?: "Masjid",
+                    isOnline = state.isOnline,
+                    onStop = viewModel::stopInAppNavigation
+                )
+            } else {
+                TopSearchAndModeBar(
+                    query = state.searchQuery,
+                    viewMode = state.viewMode,
+                    onQueryChange = viewModel::onSearchQueryChanged,
+                    onSubmitSearch = {
+                        focusManager.clearFocus()
+                        viewModel.submitSearch()
+                    },
+                    onClearQuery = {
+                        viewModel.onSearchQueryChanged("")
+                        focusManager.clearFocus()
+                    },
+                    onToggleViewMode = {
+                        val next = if (state.viewMode == ViewMode.MAP) ViewMode.LIST else ViewMode.MAP
+                        viewModel.toggleViewMode(next)
+                    },
+                    onOpenSettings = viewModel::openSettingsSheet
+                )
 
-            if (state.isLoadingMasjids || state.isLoadingRoute) {
-                LinearProgressIndicator(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp)),
-                    color = MaterialTheme.colorScheme.primary
+                if (state.isLoadingMasjids || state.isLoadingRoute) {
+                    LinearProgressIndicator(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp)),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+
+                QuickActionChipsRow(
+                    masjids = visibleMasjids,
+                    selectedMasjid = state.selectedMasjid,
+                    radiusKm = state.searchRadiusKm,
+                    showOnlyFavorites = state.showOnlyFavoriteMasjids,
+                    showOnlyWheelchair = state.showOnlyWheelchairMasjids,
+                    favoritesCount = state.favoriteMasjidIds.size,
+                    onToggleFavoritesFilter = viewModel::toggleFavoritesFilter,
+                    onToggleWheelchairFilter = viewModel::toggleWheelchairFilter,
+                    onOpenQibla = onOpenQiblaSheet,
+                    onSelectNearest = viewModel::selectNearestMasjid,
+                    onCycleRadius = viewModel::cycleSearchRadius,
+                    onOpenOfflineSheet = onOpenOfflineSheet,
+                    onOpenNearestPrayerTimes = {
+                        val target = state.selectedMasjid ?: visibleMasjids.firstOrNull()
+                        if (target != null) viewModel.openPrayerSheet(target)
+                    }
                 )
             }
 
-            QuickActionChipsRow(
-                masjids = visibleMasjids,
-                selectedMasjid = state.selectedMasjid,
-                radiusKm = state.searchRadiusKm,
-                showOnlyFavorites = state.showOnlyFavoriteMasjids,
-                showOnlyWheelchair = state.showOnlyWheelchairMasjids,
-                favoritesCount = state.favoriteMasjidIds.size,
-                onToggleFavoritesFilter = viewModel::toggleFavoritesFilter,
-                onToggleWheelchairFilter = viewModel::toggleWheelchairFilter,
-                onOpenQibla = onOpenQiblaSheet,
-                onSelectNearest = viewModel::selectNearestMasjid,
-                onCycleRadius = viewModel::cycleSearchRadius,
-                onOpenOfflineSheet = onOpenOfflineSheet,
-                onOpenNearestPrayerTimes = {
-                    val target = state.selectedMasjid ?: visibleMasjids.firstOrNull()
-                    if (target != null) viewModel.openPrayerSheet(target)
+            if (state.activeGeofenceMasjidName != null) {
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.tertiaryContainer,
+                    modifier = Modifier
+                        .align(Alignment.CenterHorizontally)
+                        .clip(RoundedCornerShape(16.dp))
+                        .clickable { viewModel.exitMasjidQuietMode() }
+                        .testTag("geofence_dnd_pill")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.DoNotDisturbOn,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = "Quiet Mode · Near ${state.activeGeofenceMasjidName} · Tap to exit",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
-            )
+            }
 
             val showSearchThisArea = state.viewMode == ViewMode.MAP &&
                 !state.isLoadingMasjids &&
@@ -323,9 +374,12 @@ fun MasjidMapScreen(
                         travelMode = state.travelMode,
                         showSteps = state.showRouteSteps,
                         isLoadingRoute = state.isLoadingRoute,
+                        isGuidedNavActive = state.isGuidedNavActive,
                         onSwitchMode = viewModel::switchTravelMode,
                         onToggleSteps = viewModel::toggleRouteSteps,
                         onShowPrayerTimes = viewModel::openPrayerSheet,
+                        onStartInAppNav = viewModel::startInAppNavigation,
+                        onStopInAppNav = viewModel::stopInAppNavigation,
                         onStartExternalNav = { m -> launchExternalNavigation(context, m, state.travelMode) },
                         onClearRoute = viewModel::clearRoute
                     )
@@ -722,5 +776,122 @@ fun launchExternalNavigation(
         context.startActivity(Intent(Intent.ACTION_VIEW, osmWebUri))
     } catch (_: Exception) {
         Toast.makeText(context, "No maps or browser app found to open navigation.", Toast.LENGTH_SHORT).show()
+    }
+}
+
+@Composable
+private fun InAppGuidanceBanner(
+    progress: NavigationProgress,
+    destinationName: String,
+    isOnline: Boolean,
+    onStop: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(22.dp),
+        color = MaterialTheme.colorScheme.primary,
+        contentColor = MaterialTheme.colorScheme.onPrimary,
+        shadowElevation = 4.dp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("in_app_guidance_banner")
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.18f),
+                        modifier = Modifier.size(42.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = if (progress.arrived) Icons.Filled.Flag else Icons.Filled.Navigation,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.secondaryContainer,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = progress.currentInstruction,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        val meta = buildString {
+                            if (progress.currentStepDistanceText.isNotBlank()) {
+                                append(progress.currentStepDistanceText)
+                                append(" · ")
+                            }
+                            append(GeoFormatters.formatDuration(progress.remainingSeconds))
+                            append(" left (")
+                            append(GeoFormatters.formatDistance(progress.remainingMeters.toDouble()))
+                            append(")")
+                        }
+                        Text(
+                            text = meta,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.secondaryContainer
+                        )
+                    }
+                }
+                FilledTonalButton(
+                    onClick = onStop,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .height(42.dp)
+                        .testTag("stop_in_app_nav_button")
+                ) {
+                    Text("End")
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = if (!progress.nextInstruction.isNullOrBlank()) {
+                        "Then: ${progress.nextInstruction}"
+                    } else {
+                        "Destination: $destinationName"
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                if (!isOnline) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.18f)
+                    ) {
+                        Text(
+                            text = "Offline Nav",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+            }
+        }
     }
 }

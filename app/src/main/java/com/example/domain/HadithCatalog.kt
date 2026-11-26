@@ -383,4 +383,74 @@ object HadithCatalog {
             reference = "Sahih Muslim 2588"
         )
     )
+
+    private val narratorSegmentCue = Regex(
+        pattern = "(?i)(?:narrated|on the authority|it is narrated|it was narrated|reported|transmitted|who said|as saying|i heard|heard the|messenger of allah|allah'?s messenger|the prophet|\\(ra\\)|may allah be pleased|radiyallahu)"
+    )
+
+    private val directSayingBridge = Regex(
+        pattern = "(?i)^(?:i heard (?:the )?(?:messenger of allah|allah'?s messenger|prophet)[^:,]{0,60}?say(?:ing)?|(?:the )?(?:messenger of allah|allah'?s messenger|the prophet(?:\\s+of allah)?)(?:\\s*\\([^)]{1,30}\\)|\\s*ﷺ)?\\s*(?:used to\\s+)?say(?:s|ing)?|(?:the )?(?:messenger of allah|allah'?s messenger|the prophet)(?:\\s*\\([^)]{1,30}\\)|\\s*ﷺ)?\\s*said)\\s*[:,]\\s*"
+    )
+
+    private val colonSegmentRegex = Regex("^([^:]{4,240}?):\\s+(.+)$")
+
+    /**
+     * Strips leading chains of narrators (isnad) from English Hadith text for compact surfaces
+     * such as the home screen widget, falling back safely if stripping would truncate the matn.
+     */
+    fun stripIsnadForWidget(rawText: String): String {
+        val normalized = rawText.trim().replace(Regex("\\s+"), " ")
+        if (normalized.isBlank()) return ""
+
+        var current = normalized
+        for (pass in 0 until 4) {
+            val bridgeMatch = directSayingBridge.find(current)
+            if (bridgeMatch != null) {
+                val remainder = current.substring(bridgeMatch.range.last + 1).trim()
+                if (remainder.length >= 16) {
+                    current = remainder
+                    continue
+                }
+            }
+            val colonMatch = colonSegmentRegex.matchEntire(current) ?: break
+            val prefix = colonMatch.groupValues[1].trim()
+            val remainder = colonMatch.groupValues[2].trim()
+            val looksLikeIsnad = narratorSegmentCue.containsMatchIn(prefix) &&
+                !prefix.contains("allah says", ignoreCase = true)
+            if (looksLikeIsnad && remainder.length >= 16) {
+                current = remainder
+            } else {
+                break
+            }
+        }
+
+        val trailingBridge = directSayingBridge.find(current)
+        if (trailingBridge != null) {
+            val remainder = current.substring(trailingBridge.range.last + 1).trim()
+            if (remainder.length >= 16) {
+                current = remainder
+            }
+        }
+
+        current = unwrapOuterQuotes(current).trim()
+        if (current.length < 16) return normalized
+        return current.replaceFirstChar { ch ->
+            if (ch.isLowerCase()) ch.titlecase(java.util.Locale.ROOT) else ch.toString()
+        }
+    }
+
+    private fun unwrapOuterQuotes(text: String): String {
+        var s = text.trim()
+        val pairs = listOf('"' to '"', '“' to '”', '\'' to '\'', '‘' to '’')
+        for ((open, close) in pairs) {
+            if (s.length >= 2 && s.first() == open) {
+                if (s.last() == close) {
+                    s = s.substring(1, s.length - 1).trim()
+                } else if (s.count { it == open || it == close } == 1) {
+                    s = s.substring(1).trim()
+                }
+            }
+        }
+        return s
+    }
 }

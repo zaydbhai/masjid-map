@@ -93,6 +93,11 @@ fun SettingsSheet(
     suhoorLeadMinutes: Int,
     persistentCountdownNotification: Boolean,
     autoDndAtPrayer: Boolean,
+    leaveForMasjidReminderEnabled: Boolean,
+    leaveForMasjidPrepMinutes: Int,
+    masjidGeofenceDndEnabled: Boolean,
+    tajwidEnabled: Boolean,
+    hasHomeMasjid: Boolean,
     isDownloadingAdhan: Boolean,
     cachedAdhanIds: Set<String>,
     onSelectMethod: (CalculationMethod) -> Unit,
@@ -113,6 +118,10 @@ fun SettingsSheet(
     onSelectSuhoorLead: (Int) -> Unit,
     onTogglePersistentCountdown: (Boolean) -> Unit,
     onToggleAutoDnd: (Boolean) -> Unit,
+    onToggleLeaveForMasjid: (Boolean) -> Unit,
+    onSelectLeavePrepMinutes: (Int) -> Unit,
+    onToggleMasjidGeofenceDnd: (Boolean) -> Unit,
+    onToggleTajwid: (Boolean) -> Unit,
     onPreviewAdhan: (PrayerAlertSound) -> Unit,
     onStopAdhan: () -> Unit,
     onSendTestNotification: () -> Unit,
@@ -582,6 +591,102 @@ fun SettingsSheet(
                         }
                     }
                 }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                // Leave-for-Masjid Commute Reminder
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Leave-for-Masjid Alert",
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
+                            text = if (hasHomeMasjid) {
+                                "Alert with travel time + ${leaveForMasjidPrepMinutes}m prep before Home Masjid Iqamah"
+                            } else {
+                                "Pin any masjid as Home Masjid in its Prayer Times sheet first"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = leaveForMasjidReminderEnabled,
+                        onCheckedChange = onToggleLeaveForMasjid,
+                        modifier = Modifier.testTag("leave_for_masjid_switch")
+                    )
+                }
+                if (leaveForMasjidReminderEnabled) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf(5, 10, 15).forEach { mins ->
+                            FilterChip(
+                                selected = leaveForMasjidPrepMinutes == mins,
+                                onClick = { onSelectLeavePrepMinutes(mins) },
+                                label = { Text("${mins}m prep") },
+                                modifier = Modifier.testTag("leave_prep_$mins")
+                            )
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                // Masjid Proximity Quiet Mode (Geofence DND)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Masjid Geofence Quiet Mode (DND)",
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
+                            text = if (hasDndPolicyAccess) {
+                                "Auto-enables DND within 100m of Home or favorite masjids (restores when leaving or after 45m)"
+                            } else {
+                                "Requires Do Not Disturb access in Android settings"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = masjidGeofenceDndEnabled && hasDndPolicyAccess,
+                        onCheckedChange = { enable ->
+                            if (!enable) {
+                                onToggleMasjidGeofenceDnd(false)
+                            } else if (hasDndPolicyAccess) {
+                                onToggleMasjidGeofenceDnd(true)
+                            } else {
+                                onToggleMasjidGeofenceDnd(true)
+                                runCatching {
+                                    context.startActivity(
+                                        Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)
+                                    )
+                                }.onFailure {
+                                    Toast.makeText(
+                                        context,
+                                        "Open Settings -> Do Not Disturb access to enable",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                            }
+                        },
+                        modifier = Modifier.testTag("masjid_geofence_dnd_switch")
+                    )
+                }
             }
 
             // ---- Fonts & Font Sizes ----
@@ -708,6 +813,32 @@ fun SettingsSheet(
                     valueRange = 13f..24f,
                     modifier = Modifier.testTag("english_size_slider")
                 )
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Tajwid Color Accents (Qur'an)",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Optional rule highlights for Ghunnah, Qalqalah, Madd, Idgham & Ikhfa",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = tajwidEnabled,
+                        onCheckedChange = onToggleTajwid,
+                        modifier = Modifier.testTag("settings_tajwid_switch")
+                    )
+                }
             }
 
             // ---- Quran English Translation ----

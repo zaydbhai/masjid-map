@@ -139,6 +139,22 @@ class QuranPlaybackController private constructor(context: Context) {
         syncServiceState()
     }
 
+    fun seekToFraction(fraction: Float) {
+        val dur = audioPlayer.durationMs()
+        if (dur <= 0) return
+        val clamped = fraction.coerceIn(0f, 1f)
+        val targetMs = (dur * clamped).toInt()
+        audioPlayer.seekTo(targetMs)
+        _snapshot.update {
+            it.copy(
+                progressFraction = clamped,
+                positionMs = targetMs.toLong(),
+                durationMs = dur.toLong()
+            )
+        }
+        syncServiceState()
+    }
+
     fun toggleAutoAdvance() {
         _snapshot.update { it.copy(autoAdvanceAyah = !it.autoAdvanceAyah) }
     }

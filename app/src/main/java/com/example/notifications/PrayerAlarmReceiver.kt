@@ -57,6 +57,10 @@ class PrayerAlarmReceiver : BroadcastReceiver() {
         val sound = PrayerAlertSound.fromId(intent.getStringExtra(EXTRA_SOUND_ID))
         val notifId = intent.getIntExtra(EXTRA_NOTIFICATION_ID, 4100)
         val isSuhoor = intent.getBooleanExtra(EXTRA_IS_SUHOOR, false)
+        val isTahajjud = intent.getBooleanExtra(EXTRA_IS_TAHAJJUD, false)
+        val isLeaveMasjid = intent.getBooleanExtra(EXTRA_IS_LEAVE_MASJID, false)
+        val homeMasjidName = intent.getStringExtra(EXTRA_HOME_MASJID_NAME)
+        val iqamahTime = intent.getStringExtra(EXTRA_IQAMAH_TIME)
         val autoDnd = intent.getBooleanExtra(EXTRA_AUTO_DND, false)
         val isFajrFadeIn = intent.getBooleanExtra(EXTRA_FAJR_FADE_IN, false)
 
@@ -69,10 +73,14 @@ class PrayerAlarmReceiver : BroadcastReceiver() {
             leadMinutes = leadMinutes,
             sound = sound,
             isSuhoor = isSuhoor,
-            isFajrFadeIn = isFajrFadeIn
+            isFajrFadeIn = isFajrFadeIn,
+            isTahajjud = isTahajjud,
+            isLeaveMasjid = isLeaveMasjid,
+            homeMasjidName = homeMasjidName,
+            iqamahTime = iqamahTime
         )
 
-        if (autoDnd && !isSuhoor && prayerTime != "Test Alert") {
+        if (autoDnd && !isSuhoor && !isTahajjud && !isLeaveMasjid && prayerTime != "Test Alert") {
             activateQuietPrayerDnd(context)
         }
 
@@ -119,6 +127,10 @@ class PrayerAlarmReceiver : BroadcastReceiver() {
         const val EXTRA_IS_SUHOOR = "extra_is_suhoor"
         const val EXTRA_AUTO_DND = "extra_auto_dnd"
         const val EXTRA_FAJR_FADE_IN = "extra_fajr_fade_in"
+        const val EXTRA_IS_TAHAJJUD = "extra_is_tahajjud"
+        const val EXTRA_IS_LEAVE_MASJID = "extra_is_leave_masjid"
+        const val EXTRA_HOME_MASJID_NAME = "extra_home_masjid_name"
+        const val EXTRA_IQAMAH_TIME = "extra_iqamah_time"
 
         fun postPrayerNotification(
             context: Context,
@@ -128,7 +140,11 @@ class PrayerAlarmReceiver : BroadcastReceiver() {
             leadMinutes: Int,
             sound: PrayerAlertSound,
             isSuhoor: Boolean = false,
-            isFajrFadeIn: Boolean = false
+            isFajrFadeIn: Boolean = false,
+            isTahajjud: Boolean = false,
+            isLeaveMasjid: Boolean = false,
+            homeMasjidName: String? = null,
+            iqamahTime: String? = null
         ) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 val granted = ContextCompat.checkSelfPermission(
@@ -148,8 +164,17 @@ class PrayerAlarmReceiver : BroadcastReceiver() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
+            val iqamahSuffix = if (!iqamahTime.isNullOrBlank()) {
+                val label = homeMasjidName?.take(22) ?: "Masjid"
+                " · $label Iqamah $iqamahTime"
+            } else {
+                ""
+            }
+
             val title = when {
                 isSuhoor -> "Suhoor Ends in $leadMinutes min"
+                isTahajjud -> "Tahajjud · Last Third of the Night"
+                isLeaveMasjid -> "Leave Now for ${homeMasjidName ?: "Masjid"}"
                 isFajrFadeIn -> "Fajr Wake-Up · Time for Salah"
                 leadMinutes > 0 -> "$prayerName in $leadMinutes min"
                 else -> "Time for $prayerName"
@@ -157,9 +182,11 @@ class PrayerAlarmReceiver : BroadcastReceiver() {
             val body = when {
                 prayerTime == "Test Alert" -> "Offline prayer reminders & Adhan audio are ready."
                 isSuhoor -> "Fajr begins at $prayerTime. Finish your Suhoor meal & hydrate."
-                isFajrFadeIn -> "Fajr began at $prayerTime. Gentle fade-in Adhan active."
-                leadMinutes > 0 -> "$prayerName begins at $prayerTime. Prepare for Salah."
-                else -> "$prayerName time has begun ($prayerTime)."
+                isTahajjud -> "Last ⅓ of the night began at $prayerTime. Quiet Qiyam & dua window."
+                isLeaveMasjid -> "$prayerName ${if (!iqamahTime.isNullOrBlank()) "Iqamah" else "Adhan"} is at $prayerTime (~$leadMinutes min travel)."
+                isFajrFadeIn -> "Fajr began at $prayerTime$iqamahSuffix. Gentle fade-in Adhan active."
+                leadMinutes > 0 -> "$prayerName begins at $prayerTime$iqamahSuffix. Prepare for Salah."
+                else -> "$prayerName time has begun ($prayerTime)$iqamahSuffix."
             }
 
             val priority = when {
