@@ -109,6 +109,7 @@ import com.example.domain.SleepTimerOption
 import com.example.domain.SurahCatalog
 import com.example.domain.SurahContent
 import com.example.domain.SurahInfo
+import com.example.domain.TafsirEntry
 import com.example.ui.theme.LocalReadingTypography
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
@@ -476,6 +477,7 @@ fun QuranScreen(
                     onOpenSurah = { num -> quranViewModel.openSurah(num) },
                     onJumpToJuz = { juz -> quranViewModel.openSurah(juz.startSurah, initialAyah = juz.startAyah) },
                     onWordTap = { verse, idx, word -> quranViewModel.inspectArabicWord(verse, idx, word) },
+                    onOpenTafsir = { verse -> quranViewModel.openTafsirForVerse(verse) },
                     onCopyVerse = { verse -> copyQuranVerse(context, activeSurah.surah, verse, activeSurah.translation) },
                     onShareVerse = { verse -> shareQuranVerse(context, activeSurah.surah, verse, activeSurah.translation) }
                 )
@@ -802,6 +804,7 @@ private fun SurahReaderView(
     onOpenSurah: (Int) -> Unit,
     onJumpToJuz: (JuzInfo) -> Unit,
     onWordTap: (QuranVerse, Int, String) -> Unit,
+    onOpenTafsir: (QuranVerse) -> Unit,
     onCopyVerse: (QuranVerse) -> Unit,
     onShareVerse: (QuranVerse) -> Unit
 ) {
@@ -1328,6 +1331,44 @@ private fun SurahReaderView(
                                 lineHeight = (reading.englishFontSizeSp * 1.52f).sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            val surahTafsirCached = uiState.cachedTafsirSurahNumbers.contains(verse.chapter)
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.72f),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .clickable { onOpenTafsir(verse) }
+                                    .testTag("tafsir_ayah_${verse.verse}")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.MenuBook,
+                                        contentDescription = "Open Tafsir for Ayah ${verse.chapter}:${verse.verse}",
+                                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Text(
+                                        text = if (surahTafsirCached) {
+                                            "Tafsir · Offline"
+                                        } else {
+                                            "Tafsir · ${uiState.selectedTafsir.shortLabel}"
+                                        },
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -1871,4 +1912,33 @@ internal fun shareQuranVerse(
         putExtra(Intent.EXTRA_TEXT, body)
     }
     context.startActivity(Intent.createChooser(intent, "Share Ayah"))
+}
+
+private fun formatTafsirText(entry: TafsirEntry): String {
+    val surahName = SurahCatalog.byNumber(entry.chapter).nameEnglish
+    return buildString {
+        appendLine("$surahName (${entry.chapter}:${entry.verse}) · ${entry.edition.displayName}")
+        appendLine()
+        append(entry.commentary)
+    }
+}
+
+internal fun copyTafsirEntry(context: Context, entry: TafsirEntry) {
+    val body = formatTafsirText(entry)
+    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+    cm?.setPrimaryClip(ClipData.newPlainText("Tafsir ${entry.chapter}:${entry.verse}", body))
+    Toast.makeText(
+        context,
+        "Copied Tafsir for ${entry.chapter}:${entry.verse}",
+        Toast.LENGTH_SHORT
+    ).show()
+}
+
+internal fun shareTafsirEntry(context: Context, entry: TafsirEntry) {
+    val body = formatTafsirText(entry)
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_TEXT, body)
+    }
+    context.startActivity(Intent.createChooser(intent, "Share Tafsir"))
 }

@@ -767,3 +767,59 @@ data class QuranWordAnalysis(
     val transliteration: String? = null,
     val dominantTajwidRule: TajwidRule? = null
 )
+
+enum class QuranTafsirOption(
+    val id: String,
+    val displayName: String,
+    val shortLabel: String,
+    val authorNote: String,
+    val isArabicScript: Boolean,
+    val quranComResourceId: Int
+) {
+    IBN_KATHIR(
+        id = "en-tafisr-ibn-kathir",
+        displayName = "Tafsir Ibn Kathir (Abridged)",
+        shortLabel = "Ibn Kathir",
+        authorNote = "Classical narration-based exegesis · English",
+        isArabicScript = false,
+        quranComResourceId = 169
+    ),
+    MAARIF_UL_QURAN(
+        id = "en-tafsir-maarif-ul-quran",
+        displayName = "Ma'arif al-Qur'an",
+        shortLabel = "Ma'arif",
+        authorNote = "Mufti Muhammad Shafi · Legal & practical",
+        isArabicScript = false,
+        quranComResourceId = 168
+    ),
+    AL_JALALAYN(
+        id = "en-al-jalalayn",
+        displayName = "Tafsir al-Jalalayn",
+        shortLabel = "Al-Jalalayn",
+        authorNote = "Concise classic verse-by-verse gloss · English",
+        isArabicScript = false,
+        quranComResourceId = 74
+    ),
+    AR_MUYASSAR(
+        id = "ar-tafsir-muyassar",
+        displayName = "التفسير الميسر",
+        shortLabel = "الميسر (AR)",
+        authorNote = "King Fahd Complex · Clear Arabic exegesis",
+        isArabicScript = true,
+        quranComResourceId = 16
+    );
+
+    companion object {
+        fun fromId(id: String?): QuranTafsirOption =
+            entries.firstOrNull { it.id == id } ?: IBN_KATHIR
+    }
+}
+
+data class TafsirEntry(
+    val chapter: Int,
+    val verse: Int,
+    val commentary: String,
+    val edition: QuranTafsirOption,
+    val groupedSourceVerse: Int? = null
+)
+

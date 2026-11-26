@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Bookmark
@@ -106,6 +107,7 @@ fun QuranListeningPage(
     onToggleBookmark: (SurahInfo, QuranVerse) -> Unit,
     onCopyVerse: (SurahInfo, QuranVerse) -> Unit,
     onShareVerse: (SurahInfo, QuranVerse) -> Unit,
+    onOpenTafsir: (QuranVerse) -> Unit,
     onWordTap: (QuranVerse, Int, String) -> Unit,
     onStop: () -> Unit,
     modifier: Modifier = Modifier
@@ -357,6 +359,22 @@ fun QuranListeningPage(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    if (currentVerse != null) {
+                        FilterChip(
+                            selected = uiState.cachedTafsirSurahNumbers.contains(playingSurahNum),
+                            onClick = { onOpenTafsir(currentVerse) },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.MenuBook,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            },
+                            label = { Text("Tafsir · ${uiState.selectedTafsir.shortLabel}") },
+                            modifier = Modifier.testTag("listening_tafsir_button")
+                        )
+                    }
+
                     FilterChip(
                         selected = uiState.tajwidEnabled,
                         onClick = onToggleTajwid,

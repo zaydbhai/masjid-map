@@ -16,6 +16,7 @@ import com.example.domain.EnglishFontOption
 import com.example.domain.LatLngPoint
 import com.example.domain.PrayerAlertSound
 import com.example.domain.PrayerName
+import com.example.domain.QuranTafsirOption
 import com.example.domain.QuranTranslationOption
 import com.example.domain.TravelMode
 import com.example.domain.WidgetBottomMode
@@ -77,7 +78,8 @@ data class UserSettings(
     val leaveForMasjidReminderEnabled: Boolean = false,
     val leaveForMasjidPrepMinutes: Int = 5,
     val masjidGeofenceDndEnabled: Boolean = false,
-    val tajwidEnabled: Boolean = false
+    val tajwidEnabled: Boolean = false,
+    val selectedTafsir: QuranTafsirOption = QuranTafsirOption.IBN_KATHIR
 ) {
     fun isPrayerAlertEnabled(name: PrayerName): Boolean = when (name) {
         PrayerName.FAJR -> notifyFajr
@@ -143,6 +145,7 @@ class UserPreferencesRepository(private val context: Context) {
         val LEAVE_FOR_MASJID_PREP_MINUTES = intPreferencesKey("leave_for_masjid_prep_minutes")
         val MASJID_GEOFENCE_DND_ENABLED = booleanPreferencesKey("masjid_geofence_dnd_enabled")
         val TAJWID_ENABLED = booleanPreferencesKey("tajwid_enabled")
+        val QURAN_TAFSIR = stringPreferencesKey("quran_tafsir")
     }
 
     val settingsFlow: Flow<UserSettings> = context.dataStore.data.map { prefs ->
@@ -200,7 +203,8 @@ class UserPreferencesRepository(private val context: Context) {
             leaveForMasjidReminderEnabled = prefs[Keys.LEAVE_FOR_MASJID_ENABLED] ?: false,
             leaveForMasjidPrepMinutes = (prefs[Keys.LEAVE_FOR_MASJID_PREP_MINUTES] ?: 5).coerceIn(0, 20),
             masjidGeofenceDndEnabled = prefs[Keys.MASJID_GEOFENCE_DND_ENABLED] ?: false,
-            tajwidEnabled = prefs[Keys.TAJWID_ENABLED] ?: false
+            tajwidEnabled = prefs[Keys.TAJWID_ENABLED] ?: false,
+            selectedTafsir = QuranTafsirOption.fromId(prefs[Keys.QURAN_TAFSIR])
         )
     }
 
@@ -402,5 +406,9 @@ class UserPreferencesRepository(private val context: Context) {
 
     suspend fun setTajwidEnabled(enabled: Boolean) {
         context.dataStore.edit { it[Keys.TAJWID_ENABLED] = enabled }
+    }
+
+    suspend fun setQuranTafsir(tafsir: QuranTafsirOption) {
+        context.dataStore.edit { it[Keys.QURAN_TAFSIR] = tafsir.id }
     }
 }

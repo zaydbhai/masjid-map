@@ -12,6 +12,8 @@ import com.example.domain.JuzInfo
 import com.example.domain.QuranBookmark
 import com.example.domain.QuranReciterOption
 import com.example.domain.QuranSearchHit
+import com.example.domain.QuranTafsirFormatter
+import com.example.domain.QuranTafsirOption
 import com.example.domain.QuranTajwidEngine
 import com.example.domain.QuranTranslationOption
 import com.example.domain.QuranVerse
@@ -21,6 +23,7 @@ import com.example.domain.SleepTimerOption
 import com.example.domain.SurahCatalog
 import com.example.domain.SurahContent
 import com.example.domain.SurahInfo
+import com.example.domain.TafsirEntry
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -57,11 +60,19 @@ data class QuranUiState(
     val activeSurahContent: SurahContent? = null,
     val isLoadingSurah: Boolean = false,
     val errorMessage: String? = null,
-    // Dedicated Listening Page & Word-by-Word Lookup State
+    // Dedicated Listening Page, Tafsir & Word-by-Word Lookup State
     val isListeningPageVisible: Boolean = false,
     val listeningSurahContent: SurahContent? = null,
     val selectedWordAnalysis: QuranWordAnalysis? = null,
     val selectedWordVerseRef: Pair<Int, Int>? = null,
+    val selectedTafsir: QuranTafsirOption = QuranTafsirOption.IBN_KATHIR,
+    val cachedTafsirSurahNumbers: Set<Int> = emptySet(),
+    val isDownloadingAllTafsir: Boolean = false,
+    val tafsirDownloadProgress: Int = 0,
+    val tafsirSheetVerse: QuranVerse? = null,
+    val activeTafsirEntry: TafsirEntry? = null,
+    val isLoadingTafsir: Boolean = false,
+    val tafsirErrorMessage: String? = null,
     // Audio Recitation & Sleep Timer State
     val playingSurah: Int? = null,
     val playingAyah: Int? = null,
@@ -97,7 +108,10 @@ class QuranViewModel(application: Application) : AndroidViewModel(application) {
     private var audioDownloadJob: Job? = null
     private var essentialAudioDownloadJob: Job? = null
     private var listeningLoadJob: Job? = null
+    private var tafsirLoadJob: Job? = null
+    private var tafsirDownloadJob: Job? = null
     private val wbwCacheBySurah = mutableMapOf<Int, Map<Int, List<Pair<String, String?>>>>()
+    private val tafsirCacheByKey = mutableMapOf<Pair<String, Int>, Map<Int, String>>()
 
     private val _uiState = MutableStateFlow(
         QuranUiState(
@@ -155,7 +169,9 @@ class QuranViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             prefs.settingsFlow.collect { settings ->
                 val prev = _uiState.value.selectedTranslation
+                val prevTafsir = _uiState.value.selectedTafsir
                 val cached = repository.getCachedSurahNumbers(settings.quranTranslation.editionId)
+                val cachedTafsir = repository.getCachedTafsirSurahNumbers(settings.selectedTafsir)
                 val activeSurah = _uiState.value.activeSurahContent?.surah
                 val cachedAudioCount = if (activeSurah != null) {
                     audioPlayer.getCachedAyahCount(settings.quranReciter, activeSurah.number, activeSurah.ayahCount)
@@ -167,7 +183,9 @@ class QuranViewModel(application: Application) : AndroidViewModel(application) {
                     it.copy(
                         selectedTranslation = settings.quranTranslation,
                         selectedReciter = settings.quranReciter,
+                        selectedTafsir = settings.selectedTafsir,
                         cachedSurahNumbers = cached,
+                        cachedTafsirSurahNumbers = cachedTafsir,
                         cachedAudioAyahsForActiveSurah = cachedAudioCount,
                         cachedAudioSurahNumbers = audioPlayer.getFullAudioCachedSurahNumbers(settings.quranReciter),
                         cachedAudioReciterIds = audioPlayer.getCachedReciterIds(),
@@ -185,6 +203,10 @@ class QuranViewModel(application: Application) : AndroidViewModel(application) {
                 val listeningSurah = _uiState.value.listeningSurahContent?.surah?.number
                 if (prev != settings.quranTranslation && listeningSurah != null) {
                     ensureListeningContentLoaded(listeningSurah, settings.quranTranslation)
+                }
+                val openTafsirVerse = _uiState.value.tafsirSheetVerse
+                if (prevTafsir != settings.selectedTafsir && openTafsirVerse != null) {
+                    openTafsirForVerse(openTafsirVerse, settings.selectedTafsir)
                 }
             }
         }
@@ -295,6 +317,177 @@ class QuranViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun selectTafsirEdition(edition: QuranTafsirOption) {
+        viewModelScope.launch { prefs.setQuranTafsir(edition) }
+        val openVerse = _uiState.value.tafsirSheetVerse
+        val cachedTafsir = repository.getCachedTafsirSurahNumbers(edition)
+        _uiState.update {
+            it.copy(
+                selectedTafsir = edition,
+                cachedTafsirSurahNumbers = cachedTafsir
+            )
+        }
+        if (openVerse != null) {
+            openTafsirForVerse(openVerse, edition)
+        }
+    }
+
+    fun openTafsirForVerse(
+        verse: QuranVerse,
+        edition: QuranTafsirOption = _uiState.value.selectedTafsir
+    ) {
+        tafsirLoadJob?.cancel()
+        val key = edition.id to verse.chapter
+        val memChapter = tafsirCacheByKey[key]
+        if (memChapter != null) {
+            val resolved = QuranTafsirFormatter.resolveVerseEntry(
+                surahNumber = verse.chapter,
+                verseNumber = verse.verse,
+                chapterMap = memChapter,
+                edition = edition
+            )
+            _uiState.update {
+                it.copy(
+                    tafsirSheetVerse = verse,
+                    activeTafsirEntry = resolved,
+                    isLoadingTafsir = false,
+                    tafsirErrorMessage = if (resolved == null) {
+                        "No commentary found for ${verse.chapter}:${verse.verse} in ${edition.shortLabel}."
+                    } else {
+                        null
+                    }
+                )
+            }
+            return
+        }
+
+        _uiState.update {
+            it.copy(
+                tafsirSheetVerse = verse,
+                activeTafsirEntry = null,
+                isLoadingTafsir = true,
+                tafsirErrorMessage = null
+            )
+        }
+        tafsirLoadJob = viewModelScope.launch {
+            try {
+                val chapterMap = repository.loadTafsirSurah(verse.chapter, edition)
+                tafsirCacheByKey[key] = chapterMap
+                val resolved = QuranTafsirFormatter.resolveVerseEntry(
+                    surahNumber = verse.chapter,
+                    verseNumber = verse.verse,
+                    chapterMap = chapterMap,
+                    edition = edition
+                )
+                val cachedTafsir = repository.getCachedTafsirSurahNumbers(edition)
+                _uiState.update {
+                    it.copy(
+                        isLoadingTafsir = false,
+                        activeTafsirEntry = resolved,
+                        cachedTafsirSurahNumbers = cachedTafsir,
+                        tafsirErrorMessage = if (resolved == null) {
+                            "No commentary found for ${verse.chapter}:${verse.verse} in ${edition.shortLabel}."
+                        } else {
+                            null
+                        }
+                    )
+                }
+            } catch (t: Throwable) {
+                _uiState.update {
+                    it.copy(
+                        isLoadingTafsir = false,
+                        activeTafsirEntry = null,
+                        tafsirErrorMessage = t.message
+                            ?: "Unable to load ${edition.shortLabel} for Surah ${verse.chapter}."
+                    )
+                }
+            }
+        }
+    }
+
+    fun stepTafsirVerse(delta: Int) {
+        val current = _uiState.value.tafsirSheetVerse ?: return
+        val surahInfo = SurahCatalog.byNumber(current.chapter)
+        val targetAyah = (current.verse + delta).coerceIn(1, surahInfo.ayahCount)
+        if (targetAyah == current.verse) return
+
+        val loadedContent = _uiState.value.activeSurahContent
+            ?.takeIf { it.surah.number == current.chapter }
+            ?: _uiState.value.listeningSurahContent?.takeIf { it.surah.number == current.chapter }
+
+        val targetVerse = loadedContent?.verses?.firstOrNull { it.verse == targetAyah }
+        if (targetVerse != null) {
+            openTafsirForVerse(targetVerse)
+        } else {
+            viewModelScope.launch {
+                val loaded = runCatching {
+                    repository.loadSurah(current.chapter, _uiState.value.selectedTranslation)
+                }.getOrNull()
+                val fetchedVerse = loaded?.verses?.firstOrNull { it.verse == targetAyah }
+                    ?: QuranVerse(current.chapter, targetAyah, "", "")
+                openTafsirForVerse(fetchedVerse)
+            }
+        }
+    }
+
+    fun retryTafsirLoad() {
+        val verse = _uiState.value.tafsirSheetVerse ?: return
+        openTafsirForVerse(verse, _uiState.value.selectedTafsir)
+    }
+
+    fun dismissTafsirSheet() {
+        tafsirLoadJob?.cancel()
+        _uiState.update {
+            it.copy(
+                tafsirSheetVerse = null,
+                activeTafsirEntry = null,
+                isLoadingTafsir = false,
+                tafsirErrorMessage = null
+            )
+        }
+    }
+
+    fun downloadCompleteTafsirOffline(
+        edition: QuranTafsirOption = _uiState.value.selectedTafsir,
+        onComplete: () -> Unit = {}
+    ) {
+        if (_uiState.value.isDownloadingAllTafsir) return
+        tafsirDownloadJob?.cancel()
+        tafsirDownloadJob = viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    isDownloadingAllTafsir = true,
+                    tafsirDownloadProgress = repository.getCachedTafsirSurahNumbers(edition).size,
+                    tafsirErrorMessage = null
+                )
+            }
+            try {
+                repository.downloadCompleteTafsirOffline(edition) { done, _ ->
+                    _uiState.update { it.copy(tafsirDownloadProgress = done) }
+                }
+                val cachedTafsir = repository.getCachedTafsirSurahNumbers(edition)
+                _uiState.update {
+                    it.copy(
+                        isDownloadingAllTafsir = false,
+                        tafsirDownloadProgress = 114,
+                        cachedTafsirSurahNumbers = cachedTafsir
+                    )
+                }
+                onComplete()
+            } catch (t: Throwable) {
+                val cachedTafsir = repository.getCachedTafsirSurahNumbers(edition)
+                _uiState.update {
+                    it.copy(
+                        isDownloadingAllTafsir = false,
+                        cachedTafsirSurahNumbers = cachedTafsir,
+                        tafsirErrorMessage = t.message
+                            ?: "Unable to download complete Tafsir. Connect to the internet and try again."
+                    )
+                }
+            }
+        }
+    }
+
     fun onSearchQueryChanged(query: String) {
         val current = _uiState.value
         _uiState.update {
@@ -331,6 +524,8 @@ class QuranViewModel(application: Application) : AndroidViewModel(application) {
     fun refreshCachedState() {
         val current = _uiState.value
         val cached = repository.getCachedSurahNumbers(current.selectedTranslation.editionId)
+        val cachedTafsir = repository.getCachedTafsirSurahNumbers(current.selectedTafsir)
+        tafsirCacheByKey.clear()
         val activeSurah = current.activeSurahContent?.surah
         val cachedAudioCount = if (activeSurah != null) {
             audioPlayer.getCachedAyahCount(current.selectedReciter, activeSurah.number, activeSurah.ayahCount)
@@ -340,6 +535,7 @@ class QuranViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update {
             it.copy(
                 cachedSurahNumbers = cached,
+                cachedTafsirSurahNumbers = cachedTafsir,
                 cachedAudioAyahsForActiveSurah = cachedAudioCount,
                 cachedAudioSurahNumbers = audioPlayer.getFullAudioCachedSurahNumbers(current.selectedReciter),
                 cachedAudioReciterIds = audioPlayer.getCachedReciterIds(),
@@ -698,6 +894,8 @@ class QuranViewModel(application: Application) : AndroidViewModel(application) {
         super.onCleared()
         audioDownloadJob?.cancel()
         essentialAudioDownloadJob?.cancel()
+        tafsirLoadJob?.cancel()
+        tafsirDownloadJob?.cancel()
         // Note: playbackController stays alive so background/lock-screen playback continues!
     }
 }

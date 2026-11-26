@@ -685,4 +685,54 @@ class PrayerTimeCalculatorTest {
         val nabud = com.example.domain.QuranTajwidEngine.analyzeArabicWordOffline("نَعْبُدُ", 1)
         assertEquals("ع-ب-د", nabud.rootLetters)
     }
+
+    @Test
+    fun tafsirFormatterCleansHtmlParsesAllSchemasAndResolvesGroupedVerses() {
+        assertEquals("en-tafisr-ibn-kathir", com.example.domain.QuranTafsirOption.IBN_KATHIR.id)
+        assertEquals("en-tafsir-maarif-ul-quran", com.example.domain.QuranTafsirOption.MAARIF_UL_QURAN.id)
+        assertEquals("en-al-jalalayn", com.example.domain.QuranTafsirOption.AL_JALALAYN.id)
+        assertEquals("ar-tafsir-muyassar", com.example.domain.QuranTafsirOption.AR_MUYASSAR.id)
+
+        // 1. HTML cleaning & entity decoding
+        val rawHtml = """<h2>Virtue of Al-Fatihah</h2><p>Bismillah &amp; Alhamdulillah.<br/>Line two &ldquo;quote&rdquo;.</p>"""
+        val cleaned = com.example.domain.QuranTafsirFormatter.cleanTafsirHtml(rawHtml)
+        assertTrue(cleaned.contains("Virtue of Al-Fatihah"))
+        assertTrue(cleaned.contains("Bismillah & Alhamdulillah.\nLine two \u201Cquote\u201D."))
+        assertTrue(!cleaned.contains("<p>") && !cleaned.contains("<h2>"))
+
+        // 2. Root array format (spa5k/tafsir_api/{surah}.json) + grouped-verse fallback
+        val spa5kJson = """[
+            {"surah": 1, "ayah": 1, "text": "<p>Commentary covering verses 1 to 3.</p>"},
+            {"surah": 1, "ayah": 4, "text": "<p>Master of the Day of Judgment.</p>"}
+        ]"""
+        val parsedSpa5k = com.example.domain.QuranTafsirFormatter.parseTafsirChapterJson(spa5kJson)
+        assertEquals(2, parsedSpa5k.size)
+
+        val directHit = com.example.domain.QuranTafsirFormatter.resolveVerseEntry(
+            surahNumber = 1,
+            verseNumber = 4,
+            chapterMap = parsedSpa5k,
+            edition = com.example.domain.QuranTafsirOption.IBN_KATHIR
+        )
+        assertEquals(null, directHit?.groupedSourceVerse)
+        assertEquals("Master of the Day of Judgment.", directHit?.commentary)
+
+        val groupedHit = com.example.domain.QuranTafsirFormatter.resolveVerseEntry(
+            surahNumber = 1,
+            verseNumber = 2,
+            chapterMap = parsedSpa5k,
+            edition = com.example.domain.QuranTafsirOption.IBN_KATHIR
+        )
+        assertEquals(1, groupedHit?.groupedSourceVerse)
+        assertEquals("Commentary covering verses 1 to 3.", groupedHit?.commentary)
+
+        // 3. Quran.com v4 tafsirs fallback format + normalized roundtrip
+        val quranComJson = """{"tafsirs":[{"verse_number":1,"verse_key":"1:1","text":"<p>Opening explanation.</p>"}]}"""
+        val parsedQc = com.example.domain.QuranTafsirFormatter.parseTafsirChapterJson(quranComJson)
+        assertEquals("Opening explanation.", parsedQc[1])
+
+        val serialized = com.example.domain.QuranTafsirFormatter.serializeNormalizedChapterJson(parsedQc)
+        val roundTrip = com.example.domain.QuranTafsirFormatter.parseTafsirChapterJson(serialized)
+        assertEquals(parsedQc, roundTrip)
+    }
 }

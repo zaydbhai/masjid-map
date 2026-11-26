@@ -42,6 +42,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.example.domain.QuranReciterOption
+import com.example.domain.QuranTafsirOption
 import com.example.domain.QuranTranslationOption
 import java.util.Locale
 
@@ -57,6 +58,10 @@ fun OfflinePackSheet(
     selectedTranslation: QuranTranslationOption,
     isDownloadingQuran: Boolean,
     quranProgress: Int,
+    selectedTafsir: QuranTafsirOption,
+    cachedTafsirSurahsCount: Int,
+    isDownloadingTafsir: Boolean,
+    tafsirProgress: Int,
     selectedReciter: QuranReciterOption,
     cachedAudioSurahsCount: Int,
     essentialAudioReadyCount: Int,
@@ -72,6 +77,7 @@ fun OfflinePackSheet(
     isDownloadingAdhan: Boolean,
     onSaveAreaOffline: () -> Unit,
     onDownloadAllQuran: () -> Unit,
+    onDownloadAllTafsir: () -> Unit,
     onDownloadEssentialAudio: () -> Unit,
     onDownloadEssentialHadith: () -> Unit,
     onDownloadAdhanAudio: () -> Unit,
@@ -290,6 +296,80 @@ fun OfflinePackSheet(
                                 "All 114 Surahs Saved Offline"
                             } else {
                                 "Download Complete Qur'an (114 Surahs)"
+                            }
+                        )
+                    }
+                }
+            }
+
+            // 2b. Offline Tafsir Commentary (114 Surahs)
+            Surface(
+                shape = RoundedCornerShape(18.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.MenuBook,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Tafsir Commentary (${selectedTafsir.shortLabel})",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "$cachedTafsirSurahsCount / 114 Surahs saved offline",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (cachedTafsirSurahsCount >= 114) {
+                            Icon(
+                                imageVector = Icons.Filled.CheckCircle,
+                                contentDescription = "All 114 Surahs Tafsir ready offline",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+
+                    if (isDownloadingTafsir) {
+                        LinearProgressIndicator(
+                            progress = { (tafsirProgress / 114f).coerceIn(0f, 1f) },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Text(
+                            text = "Caching ${selectedTafsir.shortLabel} ($tafsirProgress / 114 Surahs)…",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+
+                    FilledTonalButton(
+                        onClick = onDownloadAllTafsir,
+                        enabled = isOnline && !isDownloadingTafsir && cachedTafsirSurahsCount < 114,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("offline_download_tafsir_button")
+                    ) {
+                        Icon(Icons.Filled.CloudDownload, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            if (cachedTafsirSurahsCount >= 114) {
+                                "All 114 Tafsir Surahs Saved"
+                            } else {
+                                "Download Complete Tafsir (${selectedTafsir.shortLabel})"
                             }
                         )
                     }

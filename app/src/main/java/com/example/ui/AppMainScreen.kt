@@ -62,6 +62,7 @@ import com.example.ui.components.OfflinePackSheet
 import com.example.ui.components.PrayerTimesSheet
 import com.example.ui.components.QiblaCompassSheet
 import com.example.ui.components.QuranListeningPage
+import com.example.ui.components.QuranTafsirSheet
 import com.example.ui.components.QuranWordAnalysisSheet
 import com.example.ui.components.SettingsSheet
 import com.example.ui.components.WidgetCustomizerSheet
@@ -439,6 +440,10 @@ fun AppMainScreen(
             selectedTranslation = quranState.selectedTranslation,
             isDownloadingQuran = quranState.isDownloadingAllOffline,
             quranProgress = quranState.offlineDownloadProgress,
+            selectedTafsir = quranState.selectedTafsir,
+            cachedTafsirSurahsCount = quranState.cachedTafsirSurahNumbers.size,
+            isDownloadingTafsir = quranState.isDownloadingAllTafsir,
+            tafsirProgress = quranState.tafsirDownloadProgress,
             selectedReciter = quranState.selectedReciter,
             cachedAudioSurahsCount = quranState.cachedAudioSurahNumbers.size,
             essentialAudioReadyCount = essentialAudioReadyCount,
@@ -455,6 +460,11 @@ fun AppMainScreen(
             onSaveAreaOffline = masjidViewModel::saveCurrentAreaOffline,
             onDownloadAllQuran = {
                 quranViewModel.downloadCompleteQuranOffline(quranState.selectedTranslation) {
+                    masjidViewModel.refreshOfflineStats()
+                }
+            },
+            onDownloadAllTafsir = {
+                quranViewModel.downloadCompleteTafsirOffline(quranState.selectedTafsir) {
                     masjidViewModel.refreshOfflineStats()
                 }
             },
@@ -637,6 +647,9 @@ fun AppMainScreen(
             onShareVerse = { surah, verse ->
                 shareQuranVerse(context, surah, verse, quranState.selectedTranslation)
             },
+            onOpenTafsir = { verse ->
+                quranViewModel.openTafsirForVerse(verse)
+            },
             onWordTap = { verse, idx, surfaceWord ->
                 quranViewModel.inspectArabicWord(verse, idx, surfaceWord)
             },
@@ -653,6 +666,32 @@ fun AppMainScreen(
             arabicFontFamily = reading.arabicFontFamily,
             tajwidEnabled = quranState.tajwidEnabled,
             onDismiss = quranViewModel::dismissWordAnalysis
+        )
+    }
+
+    // Offline Tafsir Commentary Sheet (shared across Surah Reader & Listening Page)
+    quranState.tafsirSheetVerse?.let { tafsirVerse ->
+        QuranTafsirSheet(
+            verse = tafsirVerse,
+            selectedTafsir = quranState.selectedTafsir,
+            entry = quranState.activeTafsirEntry,
+            isLoading = quranState.isLoadingTafsir,
+            errorMessage = quranState.tafsirErrorMessage,
+            cachedSurahNumbers = quranState.cachedTafsirSurahNumbers,
+            isDownloadingAllTafsir = quranState.isDownloadingAllTafsir,
+            tafsirDownloadProgress = quranState.tafsirDownloadProgress,
+            onSelectTafsir = quranViewModel::selectTafsirEdition,
+            onPrevVerse = { quranViewModel.stepTafsirVerse(-1) },
+            onNextVerse = { quranViewModel.stepTafsirVerse(1) },
+            onRetry = quranViewModel::retryTafsirLoad,
+            onDownloadAllTafsir = {
+                quranViewModel.downloadCompleteTafsirOffline(quranState.selectedTafsir) {
+                    masjidViewModel.refreshOfflineStats()
+                }
+            },
+            onCopyTafsir = { entry -> copyTafsirEntry(context, entry) },
+            onShareTafsir = { entry -> shareTafsirEntry(context, entry) },
+            onDismiss = quranViewModel::dismissTafsirSheet
         )
     }
 }

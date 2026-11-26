@@ -1,6 +1,8 @@
 package com.example.data
 
 import android.content.Context
+import com.example.domain.QuranTafsirFormatter
+import com.example.domain.QuranTafsirOption
 import com.example.domain.QuranTranslationOption
 import com.example.domain.QuranVerse
 import com.example.domain.SurahCatalog
@@ -19,6 +21,10 @@ class QuranRepository(private val context: Context) {
 
     private val cacheDir: File by lazy {
         File(context.filesDir, "quran_cache").apply { mkdirs() }
+    }
+
+    private val tafsirCacheDir: File by lazy {
+        File(cacheDir, "tafsir").apply { mkdirs() }
     }
 
     private val arabicEdition = DEFAULT_ARABIC_EDITION
@@ -423,6 +429,122 @@ class QuranRepository(private val context: Context) {
             out[vNum] = list
         }
         return out
+    }
+
+    // ---- Offline Tafsir Commentary Repository ----
+
+    fun getCachedTafsirSurahNumbers(edition: QuranTafsirOption): Set<Int> {
+        if (!tafsirCacheDir.exists()) return emptySet()
+        val cached = HashSet<Int>()
+        for (ch in 1..114) {
+            val f = File(tafsirCacheDir, "${edition.id}_$ch.json")
+            if (f.exists() && f.length() > 12L) {
+                cached.add(ch)
+            }
+        }
+        return cached
+    }
+
+    suspend fun loadTafsirSurah(
+        surahNumber: Int,
+        edition: QuranTafsirOption
+    ): Map<Int, String> = withContext(Dispatchers.IO) {
+        val safeSurah = surahNumber.coerceIn(1, 114)
+        tafsirCacheDir.mkdirs()
+        val cacheFile = File(tafsirCacheDir, "${edition.id}_$safeSurah.json")
+        if (cacheFile.exists()) {
+            val cached = runCatching {
+                QuranTafsirFormatter.parseTafsirChapterJson(cacheFile.readText())
+            }.getOrNull()
+            if (!cached.isNullOrEmpty()) return@withContext cached
+        }
+
+        if (!networkMonitor.isCurrentlyOnline()) {
+            throw IllegalStateException(
+                "Offline: ${edition.shortLabel} for Surah $safeSurah isn't saved yet. Connect once to cache it offline."
+            )
+        }
+
+        val cdnUrls = listOf(
+            "https://cdn.jsdelivr.net/gh/spa5k/tafsir_api@main/tafsir/${edition.id}/$safeSurah.json",
+            "https://cdn.jsdelivr.net/gh/spa5k/tafsir_api@v1.2.3/tafsir/${edition.id}/$safeSurah.json",
+            "https://raw.githubusercontent.com/spa5k/tafsir_api/main/tafsir/${edition.id}/$safeSurah.json"
+        )
+
+        var lastError: Throwable? = null
+        for (url in cdnUrls) {
+            try {
+                val req = Request.Builder().url(url).build()
+                NetworkClients.okHttpClient.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) throw IllegalStateException("HTTP ${resp.code}")
+                    val body = resp.body?.string() ?: throw IllegalStateException("Empty body")
+                    val parsed = QuranTafsirFormatter.parseTafsirChapterJson(body)
+                    if (parsed.isNotEmpty()) {
+                        cacheFile.writeText(QuranTafsirFormatter.serializeNormalizedChapterJson(parsed))
+                        return@withContext parsed
+                    }
+                }
+            } catch (t: Throwable) {
+                lastError = t
+            }
+        }
+
+        // Fallback: Quran.com v4 chapter tafsir endpoint (handles pagination if large Surah)
+        try {
+            val combined = LinkedHashMap<Int, String>()
+            var page = 1
+            while (page <= 35) {
+                val url =
+                    "https://api.quran.com/api/v4/quran/tafsirs/${edition.quranComResourceId}?chapter_number=$safeSurah&per_page=300&page=$page"
+                val req = Request.Builder().url(url).build()
+                var nextPage: Int? = null
+                NetworkClients.okHttpClient.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) throw IllegalStateException("HTTP ${resp.code}")
+                    val body = resp.body?.string() ?: throw IllegalStateException("Empty body")
+                    val parsed = QuranTafsirFormatter.parseTafsirChapterJson(body)
+                    parsed.forEach { (ayah, text) ->
+                        val prev = combined[ayah]
+                        combined[ayah] = if (prev.isNullOrBlank()) text else "$prev\n\n$text"
+                    }
+                    val pag = JSONObject(body).optJSONObject("pagination")
+                    val np = if (pag != null && !pag.isNull("next_page")) pag.optInt("next_page", 0) else 0
+                    nextPage = if (np > page) np else null
+                }
+                val next = nextPage ?: break
+                page = next
+            }
+            if (combined.isNotEmpty()) {
+                cacheFile.writeText(QuranTafsirFormatter.serializeNormalizedChapterJson(combined))
+                return@withContext combined
+            }
+        } catch (t: Throwable) {
+            lastError = t
+        }
+
+        throw lastError ?: IllegalStateException(
+            "Unable to load ${edition.shortLabel} for Surah $safeSurah."
+        )
+    }
+
+    suspend fun downloadCompleteTafsirOffline(
+        edition: QuranTafsirOption,
+        onProgress: (completedSurahs: Int, totalSurahs: Int) -> Unit = { _, _ -> }
+    ): Int = withContext(Dispatchers.IO) {
+        if (!networkMonitor.isCurrentlyOnline() && getCachedTafsirSurahNumbers(edition).size < 114) {
+            throw IllegalStateException("Offline: Connect to the internet to download ${edition.shortLabel} Tafsir.")
+        }
+        var done = 0
+        for (surah in SurahCatalog.surahs) {
+            val cacheFile = File(tafsirCacheDir, "${edition.id}_${surah.number}.json")
+            if (!cacheFile.exists() || cacheFile.length() <= 12L) {
+                loadTafsirSurah(surah.number, edition)
+            }
+            done++
+            if (done % 2 == 0 || done == 114) {
+                onProgress(done, 114)
+            }
+        }
+        getCachedTafsirSurahNumbers(edition).size
     }
 
     companion object {
